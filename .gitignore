@@ -1,0 +1,21 @@
+# Build output
+x64/
+Debug/
+Release/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.ipdb
+*.iobj
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+
+# GBA BIOS — copyrighted
+*.bin
+
+ *.sln
+ *.vcxproj
+ *.vcxproj.filters
