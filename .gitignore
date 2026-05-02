@@ -15,7 +15,10 @@ Release/
 
 # GBA BIOS — copyrighted
 *.bin
+*.gba
 
  *.sln
  *.vcxproj
  *.vcxproj.filters
+
+ log.txt

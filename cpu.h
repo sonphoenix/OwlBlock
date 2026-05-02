@@ -20,6 +20,7 @@ struct CPU {
     uint32_t reg_abt[2] = { 0 };
     uint32_t reg_und[2] = { 0 };
     uint32_t reg_fiq[7] = { 0 };
+    uint32_t reg_user[7] = { 0 };
 
     uint32_t spsr_svc = 0;
     uint32_t spsr_irq = 0;
@@ -28,9 +29,10 @@ struct CPU {
     uint32_t spsr_fiq = 0;
 
     CPU(Bus& b) : bus(b) {}
-
+    void skipBIOS();
     void Step();
     void Execute(uint32_t instruction);
+    void executeThumb(uint16_t instruction);
     void triggerIRQ();
     void switchMode(uint8_t newMode, bool returning);
 
@@ -39,7 +41,7 @@ private:
     void     setFlags(uint32_t result, uint64_t full, uint32_t Rn, uint32_t op2, bool isSub);
     uint32_t rotate_right(uint32_t value, uint8_t amount);
     uint32_t apply_shift(uint32_t value, uint8_t shift);
-
+    uint32_t getReg(uint8_t index);
     void executeBranch(uint32_t instruction);
     void executeBx(uint32_t instruction);
     void executeDataProcessing(uint32_t instruction);
@@ -51,4 +53,24 @@ private:
     void executeLoadStoreMultiple(uint32_t instruction);
     void executePSRTransfer(uint32_t instruction);
     void executeSWI(uint32_t instruction);
+
+
+    void thumbMoveShifted(uint16_t instruction);
+    void thumbAddSubtract(uint16_t instruction);
+    void  thumbMoveImmediate(uint16_t instruction);
+    void  thumbDataProcessing(uint16_t instruction);
+    void  thumbHiRegister(uint16_t instruction);
+    void thumbPCRelativeLDR(uint16_t instruction);
+    void  thumbLoadStoreRegister(uint16_t instruction);
+    void thumbLoadStoreSign(uint16_t instruction);
+    void thumbLoadStoreImmediate(uint16_t instruction);
+    void thumbLoadStoreHalfword(uint16_t instruction);
+    void thumbSPRelative(uint16_t instruction);
+    void thumbLoadAddress(uint16_t instruction);
+    void thumbAddSP(uint16_t instruction);
+    void thumbPushPop(uint16_t instruction);
+    void thumbMultipleLoadStore(uint16_t instruction);
+    void thumbConditionalBranch(uint16_t instruction);
+    void thumbUnconditionalBranch(uint16_t instruction);
+    void thumbLongBranch(uint16_t instruction);
 };
