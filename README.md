@@ -16,7 +16,7 @@ A Game Boy Advance emulator written in C++.
 - Bus with full GBA memory map
 
 ## TODO
-- Thumb instruction set
+- Bios protection
 - PPU
 - DMA
 - Timers
