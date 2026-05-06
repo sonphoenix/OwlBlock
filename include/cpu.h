@@ -14,6 +14,7 @@ struct CPU {
     uint32_t reg[16] = { 0 };
     uint32_t cpsr = 0;
     Bus& bus;
+    bool halted = false;
 
     uint32_t reg_svc[2] = { 0 };
     uint32_t reg_irq[2] = { 0 };
@@ -33,6 +34,7 @@ struct CPU {
     void Step();
     void Execute(uint32_t instruction);
     void executeThumb(uint16_t instruction);
+    void triggerFIQ();
     void triggerIRQ();
     void switchMode(uint8_t newMode, bool returning);
 
@@ -53,8 +55,6 @@ private:
     void executeLoadStoreMultiple(uint32_t instruction);
     void executePSRTransfer(uint32_t instruction);
     void executeSWI(uint32_t instruction);
-
-
     void thumbMoveShifted(uint16_t instruction);
     void thumbAddSubtract(uint16_t instruction);
     void  thumbMoveImmediate(uint16_t instruction);

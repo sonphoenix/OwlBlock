@@ -1,7 +1,10 @@
 ﻿#include"cpu.h"
+#include"gba_registers.h"
 #include <iomanip>
+
+extern std::ofstream dbg;
+
 void CPU::switchMode(uint8_t newMode, bool returning) {
-    // CRITICAL: Capture the mode we are currently in BEFORE we change anything.
     uint8_t oldMode = cpsr & 0x1F;
 
     // --- STEP 1: Bank OUT (Save current regs to the OLD mode's bank) ---
@@ -80,14 +83,10 @@ void CPU::switchMode(uint8_t newMode, bool returning) {
     }
 }
 
-
-
-// In cpu.cpp
 void CPU::skipBIOS() {
-    printf("\nSKIP GBA BIOS - Jumping directly to ROM\n");
+    //printf("\nSKIP GBA BIOS - Jumping directly to ROM\n");
 
     // Clear WRAM (0x3007E00 to 0x3008000) - stacks and BIOS IRQ vector/flags
-    // In your case, this is IWRAM at 0x03000000 + offset
     for (uint32_t i = 0x3007E00; i < 0x3008000; i++) {
         bus.write8(i, 0);
     }
@@ -112,32 +111,50 @@ void CPU::skipBIOS() {
     reg[13] = 0x03007F00;      // SP (User/System)
 
     // Jump to ROM entry point
-    //reg[15] = 0x08000000;
+    reg[15] = MEM_ROM;
 
     // Ensure ARM mode (clear Thumb bit)
     cpsr &= ~(1 << 5);
 }
 
 void CPU::Step() {
-    if (cpsr & (1 << 5)) { //THUMB fetch 16 bits
-        uint16_t instruction = bus.read16(reg[15]);
-        reg[15] += 2;
-        executeThumb(instruction);
-    }
-    else { //ARM fetch 32 bits
-        uint32_t instruction = bus.read32(reg[15]);
-        reg[15] += 4;
-        Execute(instruction);
-    }
 
+    if (halted) {
+        //do nothing
+        return;
+    }
+    uint32_t fetch_pc = reg[15]; // In ARM, reg[15] is usually the instruction being executed + 8
+
+    if (cpsr & (1 << 5)) { // THUMB
+        uint16_t instr = bus.read16(fetch_pc);
+
+        // BIOS Protection: Even in Thumb mode, the latch is updated 
+        // with the 32-bit word aligned at that address.
+        if (fetch_pc < 0x4000) {
+            bus.updateBiosLatch(bus.read32(fetch_pc & ~3));
+        }
+
+        reg[15] += 2;
+        executeThumb(instr);
+    }
+    else { // ARM
+        uint32_t instr = bus.read32(fetch_pc);
+
+        if (fetch_pc < 0x4000) {
+            bus.updateBiosLatch(instr);
+        }
+
+        reg[15] += 4;
+        Execute(instr);
+    }
 }
 
 uint32_t CPU::getReg(uint8_t index) {
     if (index == 15) {
-        // ARM mode: PC is +8 bytes ahead
-        // Thumb mode: PC is +4 bytes ahead
-        bool thumb = cpsr & (1 << 5);
-        return reg[15] + (thumb ? 2 : 4);
+        if (cpsr & (1 << 5))   // Thumb
+            return (reg[15] ) + 2;   // word‑aligned PC + 4
+        else                   // ARM
+            return reg[15] + 4;          // already at current_pc+4 → add 4 more
     }
     return reg[index];
 }
@@ -313,6 +330,21 @@ void CPU::executeDataProcessing(uint32_t instruction) {
 
     bool op2_is_reg_shift = !immediate && ((instruction >> 4) & 1);
 
+    // ADR detection: ADD or SUB with Rn=15, immediate operand
+    if (Rn == 15 && ((instruction >> 25) & 1) == 1 && (opcode == 0b0100 || opcode == 0b0010)) {
+        uint32_t pc_val = getReg(15);
+        uint8_t rotation = (instruction >> 8) & 0xF;
+        uint8_t imm8 = instruction & 0xFF;
+        uint32_t offset = rotate_right(imm8, rotation * 2);
+        uint32_t computed = (opcode == 0b0100) ? (pc_val + offset) : (pc_val - offset);
+
+        dbg << "ADR: PC=" << std::hex << pc_val
+            << " offset=0x" << offset
+            << " -> r" << std::dec << (int)Rd
+            << " = 0x" << std::hex << computed << "\n";
+        dbg.flush();
+    }
+
     auto getOp2 = [&](uint8_t RnIndex) -> uint32_t {
         if (immediate) {
             uint8_t rotation = (instruction >> 8) & 0xF;
@@ -377,12 +409,19 @@ void CPU::executeDataProcessing(uint32_t instruction) {
 
     if (isArithmetic) result = (uint32_t)full;
     bool writesResult = (opcode < 0b1000 || opcode > 0b1011);
-    if (S && Rd == 15) {
-        switchMode(0, true);   // always restore SPSR
-        if (writesResult) {
-            reg[15] = result;  // only write PC for ALU instructions (MOV, ADD, etc.)
+    // After computing result, before writing to Rd:
+    if (Rd == 15) {
+        if (S) {
+            uint8_t mode = cpsr & 0x1F;
+            if (mode != MODE_USER && mode != MODE_SYSTEM) {
+                // Exception return: restore CPSR from SPSR
+                switchMode(mode, true);  // returning=true
+                reg[15] = result & ~3;
+                return;
+            }
         }
-        return;                // never update flags when restoring SPSR
+        reg[15] = result & ~3;
+        return;
     }
 
     if (writesResult) {
@@ -787,33 +826,49 @@ void CPU::executePSRTransfer(uint32_t instruction) {
 }
 
 void CPU::executeSWI(uint32_t instruction) {
-    uint32_t returnAddress;
-    bool isThumb = (cpsr & (1 << 5));
+    // If Thumb, reg[15] is already PC+2. If ARM, reg[15] is already PC+4.
+    // This is exactly where we want to return.
+    uint32_t returnAddress = reg[15];
 
-    if (isThumb) {
-        returnAddress = reg[15]; // Already at next instr
-    }
-    else {
-        returnAddress = reg[15]; // Already at next instr
-    }
-
+    uint32_t oldCPSR = cpsr;
     switchMode(MODE_SUPERVISOR, false);
 
+    spsr_svc = oldCPSR; // Ensure SPSR is explicitly saved
     reg[14] = returnAddress;
-    cpsr |= (1 << 7);   // Disable IRQ
-    cpsr &= ~(1 << 5);  // Enter ARM Mode
-    reg[15] = 0x08;     // Jump to SWI vector
+
+    cpsr |= (1 << 7);    // Disable IRQ
+    cpsr &= ~(1 << 5);   // Force ARM mode for BIOS
+    reg[15] = 0x08;      // SWI Vector
 }
 
 void CPU::triggerIRQ() {
-    // only trigger if IRQs are enabled
-    if (cpsr & (1u << 7)) return; // I bit set = disabled
+    halted = false;
+    uint32_t oldCPSR = cpsr;
 
-    reg[14] = reg[15] - 4;        // save return address in R14_irq
-    switchMode(MODE_IRQ, false);   // spsr_irq = old CPSR, loads irq regs
-    cpsr |= (1u << 7);           // disable further IRQs
-    cpsr &= ~(1u << 5);           // force ARM mode
-    reg[15] = 0x00000018;         // jump to IRQ handler
+    switchMode(MODE_IRQ, false);
+
+
+    reg[14] = reg[15];
+    spsr_irq = oldCPSR;
+
+    // 4. CRITICAL HARDWARE LOCK:
+    cpsr |= (1 << 7);    // Set I-bit to 1 (Disable IRQs)
+    cpsr &= ~(1 << 5);   // Clear T-bit (Switch to ARM mode)
+
+    // 5. Jump to IRQ Vector
+    reg[15] = 0x18;
+}
+void CPU::triggerFIQ() {
+    if (cpsr & (1 << 6)) return; // Check F-bit (FIQ mask)
+
+    //uint32_t oldCPSR = cpsr;
+    switchMode(MODE_FIQ, false);
+    //spsr_fiq = oldCPSR;
+
+    reg[14] = reg[15] + 4;
+    cpsr |= (1 << 7) | (1 << 6); // FIQ disables BOTH IRQ and FIQ
+    cpsr &= ~(1 << 5);           // Force ARM mode
+    reg[15] = 0x1C;              // Jump to FIQ Vector
 }
 
 void CPU::Execute(uint32_t instruction) {
@@ -888,6 +943,8 @@ void CPU::Execute(uint32_t instruction) {
         break;
 
     case 0b111:
+        dbg << "swiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
+        dbg.flush();
         executeSWI(instruction);
         break;
     }
@@ -1231,8 +1288,7 @@ void CPU::thumbHiRegister(uint16_t instruction) {
                 cpsr &= ~(1u << 5);
                 reg[15] = reg[Rs] & ~3u;   // word-align (ARM instructions are 4-byte aligned)
             }
-            std::cout << "BX → target=0x" << std::hex << reg[Rs]
-                << " PC set to 0x" << reg[15] << "\n";
+           
         }
         else { // BLX Rn — ARM9 only
         }
@@ -1370,7 +1426,7 @@ void CPU::thumbLoadStoreHalfword(uint16_t instruction) {
 
 
 void CPU::thumbSPRelative(uint16_t instruction) {
-    std::cout << "wooooooooooooooooo";
+    //std::cout << "wooooooooooooooooo";
     uint8_t opcode = (instruction>>11) & 1;
     uint8_t nn = instruction  & 0xFF;
     uint8_t Rd=(instruction >> 8) & 0x7;
@@ -1399,9 +1455,9 @@ void CPU:: thumbLoadAddress(uint16_t instruction) {
        
         uint32_t archPC = getReg(15) & ~3u;
         reg[Rd] = (archPC) + (nn * 4);
-        std::cout << "ADD PC: archPC=0x" << std::hex << archPC
+       /* std::cout << "ADD PC: archPC=0x" << std::hex << archPC
             << " nn=" << (int)nn
-            << " result=0x" << reg[Rd] << "\n";
+            << " result=0x" << reg[Rd] << "\n";*/
         break;
     }
     case 1: { //ADD SP

@@ -8,17 +8,18 @@ Release/
 *.ilk
 *.ipdb
 *.iobj
-
+Owl BLock/Debug/
+Owl BLock/Release/
 # Visual Studio
 .vs/
 *.vcxproj.user
 
 # GBA BIOS — copyrighted
 *.bin
+
+# ROMs — copyrighted
 *.gba
 
- *.sln
- *.vcxproj
- *.vcxproj.filters
-
- log.txt
+# Generated logs
+debug.txt
+log.txt

@@ -1,0 +1,44 @@
+#pragma once
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <vector>
+
+struct CPU;
+
+struct DMAchannel {
+    uint32_t sad = 0;
+    uint32_t dad = 0;
+    uint32_t cnt = 0;
+};
+
+struct Bus {
+    CPU* cpuptr = nullptr;
+    DMAchannel dma[4];
+    uint32_t bios_latch = 0;
+    uint8_t postflg = 0;
+    uint8_t vcount =0;      // current scanline (0-227)
+    uint32_t step_counter=0; // simple step counter
+    std::vector<uint8_t> bios ;
+    std::vector<uint8_t> ewram ;
+    std::vector<uint8_t> iwram ;
+    std::vector<uint8_t> pram ;
+    std::vector<uint8_t> vram ;
+    std::vector<uint8_t> rom;
+    std::vector<uint8_t> io ;
+    std::vector<uint8_t> oam ;
+    Bus();
+    uint8_t  read8(uint32_t address);
+    uint16_t read16(uint32_t address);
+    uint32_t read32(uint32_t address);
+    void tick();
+    void setCPU(CPU* _cpu);
+    void updateBiosLatch(uint32_t inst);
+    void write8(uint32_t address, uint8_t value);
+    void write16(uint32_t address, uint16_t value);
+    void write32(uint32_t address, uint32_t value);
+    void loadBIOS(const char* path);
+    void loadROM(const char* path);
+    void writeDMA(uint32_t address,uint8_t value);
+    void executeDMA(int channel);
+};
