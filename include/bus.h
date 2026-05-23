@@ -3,22 +3,30 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-
 struct CPU;
+struct PPU;
+
 
 struct DMAchannel {
-    uint32_t sad = 0;
-    uint32_t dad = 0;
+    uint32_t sad = 0, dad = 0;
     uint32_t cnt = 0;
+    uint32_t isad = 0;
+    uint32_t idad = 0;
 };
 
 struct Bus {
+
     CPU* cpuptr = nullptr;
+    PPU* ppuptr = nullptr;
     DMAchannel dma[4];
     uint32_t bios_latch = 0;
     uint8_t postflg = 0;
     uint8_t vcount =0;      // current scanline (0-227)
     uint32_t step_counter=0; // simple step counter
+    uint16_t prev_irq_signal = 0; // Member variable to track IRQ state
+    int frameCount = 0;
+    uint16_t win0h_scanline[160] = {};
+    uint16_t win0v_scanline[160] = {};
     std::vector<uint8_t> bios ;
     std::vector<uint8_t> ewram ;
     std::vector<uint8_t> iwram ;
@@ -41,4 +49,5 @@ struct Bus {
     void loadROM(const char* path);
     void writeDMA(uint32_t address,uint8_t value);
     void executeDMA(int channel);
+    void setKeyState(int bit, bool pressed);
 };
