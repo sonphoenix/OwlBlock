@@ -1,5 +1,6 @@
 ﻿// DebugView.cpp
 #include "DebugView.h"
+#include "Disassembler.h"
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -277,7 +278,6 @@ void DebugView::drawMemTab(int x, int y, int w, int h) {
 // ============================================================
 void DebugView::drawCPUTab(int x, int y, int w, int h) {
     const int F = 8, LH = 12, PAD = 8;
-    const int COL2 = 220;   // x offset for second column
     int cx = x + PAD, cy = y + PAD;
 
     // update PC trace
@@ -288,163 +288,104 @@ void DebugView::drawCPUTab(int x, int y, int w, int h) {
         lastPC = pc;
     }
 
-    // ---- Section: REGISTERS ----
+    // ---- REGISTERS (compact 2 columns) ----
     DrawText("-- REGISTERS --", cx, cy, F, { 80,120,200,255 });
     cy += LH + 2;
-
     static const char* rnames[] = {
         "R0","R1","R2","R3","R4","R5","R6","R7",
         "R8","R9","R10","R11","R12","SP","LR","PC"
     };
     for (int i = 0; i < 16; i++) {
-        int rx = cx + (i < 8 ? 0 : COL2);
-        int ry = cy + (i < 8 ? i : i - 8) * LH;
+        int rx = cx + (i < 8 ? 0 : 220);
+        int ry = cy + (i % 8) * LH;
         char buf[32];
-        snprintf(buf, sizeof(buf), "%-3s", rnames[i]);
-        DrawText(buf, rx, ry, F, { 90,110,160,255 });
-        snprintf(buf, sizeof(buf), "%08X", cpu.reg[i]);
-        // highlight PC and SP
+        snprintf(buf, sizeof(buf), "%-3s %08X", rnames[i], cpu.reg[i]);
         Color vc = (i == 15) ? Color{ 120,220,120,255 }
-            : (i == 13) ? Color{ 220,180,80,255 }
+            : (i == 14) ? Color{ 220,180,80,255 }
+            : (i == 13) ? Color{ 220,140,80,255 }
         : Color{ 200,200,200,255 };
-        DrawText(buf, rx + 28, ry, F, vc);
+        DrawText(buf, rx, ry, F, vc);
     }
-    cy += 8 * LH + 6;
-    DrawLine(cx, cy, x + w - PAD, cy, { 40,44,65,255 }); cy += 4;
+    cy += 8 * LH + 4;
 
-    // ---- Section: CPSR ----
-    DrawText("-- CPSR --", cx, cy, F, { 80,120,200,255 });
-    cy += LH + 2;
-
+    // ---- CPSR ----
     uint32_t cpsr = cpu.cpsr;
-    uint8_t  mode = cpsr & 0x1F;
-    char cpsrBuf[48];
-    snprintf(cpsrBuf, sizeof(cpsrBuf), "%08X  MODE=%s  %s%s%s%s%s%s",
-        cpsr, modeName(mode),
-        (cpsr >> 31) & 1 ? "N" : " ", (cpsr >> 30) & 1 ? "Z" : " ",
-        (cpsr >> 29) & 1 ? "C" : " ", (cpsr >> 28) & 1 ? "V" : " ",
-        (cpsr >> 7) & 1 ? "I" : " ", (cpsr >> 5) & 1 ? "T" : " ");
-    DrawText(cpsrBuf, cx, cy, F, { 220,200,100,255 }); cy += LH;
+    char cpsrBuf[64];
+    snprintf(cpsrBuf, sizeof(cpsrBuf), "CPSR:%08X MODE=%s N%d Z%d C%d V%d I%d T%d",
+        cpsr, modeName(cpsr & 0x1F),
+        (cpsr >> 31) & 1, (cpsr >> 30) & 1, (cpsr >> 29) & 1, (cpsr >> 28) & 1,
+        (cpsr >> 7) & 1, (cpsr >> 5) & 1);
+    DrawText(cpsrBuf, cx, cy, F, { 220,200,100,255 }); cy += LH + 4;
 
-    // bit flags visualised
-    static const char* flagNames[] = { "T","F","I","","","","","",
-                                       "","","","","","","","",
-                                       "","","","","","","","",
-                                       "","","","","V","C","Z","N" };
-    // just draw the top 8 meaningful bits
-    int bx2 = cx;
-    const char* topBits[] = { "N","Z","C","V","","","I","T" };
-    uint8_t topVal[] = {
-        (uint8_t)((cpsr >> 31) & 1),(uint8_t)((cpsr >> 30) & 1),
-        (uint8_t)((cpsr >> 29) & 1),(uint8_t)((cpsr >> 28) & 1),
-        0,0,
-        (uint8_t)((cpsr >> 7) & 1),(uint8_t)((cpsr >> 5) & 1)
-    };
-    for (int i = 0;i < 8;i++) {
-        if (i == 4 || i == 5) { bx2 += 10; continue; }
-        bool set = topVal[i];
-        DrawRectangle(bx2, cy, 18, 10, set ? Color{ 60,170,90,255 } : Color{ 30,35,50,255 });
-        DrawText(set ? "1" : "0", bx2 + 5, cy, F, set ? WHITE : Color{ 60,70,90,255 });
-        DrawText(topBits[i], bx2 + 3, cy + 11, 6, set ? Color{ 140,230,140,255 } : Color{ 60,70,90,255 });
-        bx2 += 22;
-    }
-    cy += LH + 10;
-    DrawLine(cx, cy, x + w - PAD, cy, { 40,44,65,255 }); cy += 4;
-
-    // ---- Section: IRQ STATE ----
-    DrawText("-- IRQ STATE --", cx, cy, F, { 80,120,200,255 });
-    cy += LH + 2;
-
+    // ---- IRQ STATE ----
     uint16_t IME = bus.io[0x208] | (bus.io[0x209] << 8);
     uint16_t IE = bus.io[0x200] | (bus.io[0x201] << 8);
     uint16_t IF = bus.io[0x202] | (bus.io[0x203] << 8);
-    uint16_t fired = IE & IF;
-    uint8_t  dispstat = bus.io[0x04];
+    char irqBuf[64];
+    snprintf(irqBuf, sizeof(irqBuf), "IME:%d IE:%04X IF:%04X FIRED:%04X", IME & 1, IE, IF, IE & IF);
+    DrawText(irqBuf, cx, cy, F, (IME & 1) ? Color{ 100,220,100,255 } : Color{ 180,60,60,255 }); cy += LH;
 
-    // IME
-    char ibuf[12];
-    snprintf(ibuf, sizeof(ibuf), "IME: %d", IME & 1);
-    DrawText(ibuf, cx, cy, F, (IME & 1) ? Color{ 100,220,100,255 } : Color{ 180,60,60,255 });
-    cy += LH;
-
-    // IE / IF side by side with bit names
-    static const char* irqBitNames[] = {
-        "VBL","HBL","VCT","TM0","TM1","TM2","TM3","SIO",
-        "DM0","DM1","DM2","DM3","KEY","GBK","","",
-    };
-    // draw header
-    DrawText("BIT  ", cx, cy, F, { 70,80,110,255 });
-    DrawText("IE", cx + 40, cy, F, { 100,180,255,255 });
-    DrawText("IF", cx + 70, cy, F, { 255,180,80,255 });
-    DrawText("FIRED", cx + 100, cy, F, { 80,220,80,255 });
-    cy += LH;
-
-    for (int i = 0;i < 14;i++) {
-        bool ie_set = (IE >> i) & 1;
-        bool if_set = (IF >> i) & 1;
-        bool fire_set = (fired >> i) & 1;
-        Color nameCol = fire_set ? Color{ 80,230,80,255 }
-            : ie_set ? Color{ 180,180,180,255 }
-        : Color{ 60,70,90,255 };
-        char row[32];
-        snprintf(row, sizeof(row), "%-4s", irqBitNames[i]);
-        DrawText(row, cx, cy, F, nameCol);
-        DrawText(ie_set ? "1" : ".", cx + 40, cy, F, ie_set ? Color{ 100,180,255,255 } : Color{ 50,60,80,255 });
-        DrawText(if_set ? "1" : ".", cx + 70, cy, F, if_set ? Color{ 255,180,80,255 } : Color{ 50,60,80,255 });
-        DrawText(fire_set ? "!" : ".", cx + 100, cy, F, fire_set ? Color{ 80,230,80,255 } : Color{ 50,60,80,255 });
-        cy += LH;
+    // IRQ bits inline
+    static const char* irqNames[] = { "VBL","HBL","VCT","TM0","TM1","TM2","TM3","SIO","DM0","DM1","DM2","DM3","KEY","GBK" };
+    int bx = cx;
+    for (int i = 0; i < 14; i++) {
+        bool ie = (IE >> i) & 1, fi = (IF >> i) & 1;
+        if (!ie && !fi) continue;
+        char b[12]; snprintf(b, sizeof(b), "%s%s", irqNames[i], (ie && fi) ? "!" : (ie ? "e" : "f"));
+        DrawText(b, bx, cy, F, (ie && fi) ? Color{ 80,230,80,255 } : Color{ 180,180,100,255 });
+        bx += MeasureText(b, F) + 4;
     }
-
-    // DISPSTAT IRQ enables
-    cy += 2;
-    char ds[64];
-    snprintf(ds, sizeof(ds), "DISPSTAT: VBL_EN=%d HBL_EN=%d VCT_EN=%d",
-        (dispstat >> 3) & 1, (dispstat >> 4) & 1, (dispstat >> 5) & 1);
-    DrawText(ds, cx, cy, F,
-        ((dispstat >> 3) & 1) ? Color{ 100,220,100,255 } : Color{ 200,80,80,255 });
     cy += LH + 4;
-    DrawLine(cx, cy, x + w - PAD, cy, { 40,44,65,255 }); cy += 4;
 
-    // ---- Section: KEY WATCHES ----
-    DrawText("-- WATCHES --", cx, cy, F, { 80,120,200,255 });
-    cy += LH + 2;
-
+    // ---- KEY WATCHES ----
+    DrawText("-- WATCHES --", cx, cy, F, { 80,120,200,255 }); cy += LH + 2;
     struct Watch { const char* label; uint32_t addr; };
     static const Watch watches[] = {
         { "IRQ handler [03007FFC]", 0x03007FFC },
         { "BIOS flags  [03007FF8]", 0x03007FF8 },
-        { "Loop flag   [0300310C]", 0x0300310C },
         { "DISPCNT     [04000000]", 0x04000000 },
+        { "DISPSTAT    [04000004]", 0x04000004 },
+        { "HALTCNT     [04000301]", 0x04000301 },
     };
     for (auto& w : watches) {
         uint32_t val = bus.read32(w.addr);
-        char wb[64];
-        snprintf(wb, sizeof(wb), "%-26s %08X", w.label, val);
-        Color vc2 = (val == 0) ? Color{ 80,80,90,255 } : Color{ 180,220,180,255 };
-        DrawText(wb, cx, cy, F, vc2);
+        char wb[64]; snprintf(wb, sizeof(wb), "%-26s %08X", w.label, val);
+        DrawText(wb, cx, cy, F, val ? Color{ 180,220,180,255 } : Color{ 80,80,90,255 });
         cy += LH;
     }
     cy += 4;
-    DrawLine(cx, cy, x + w - PAD, cy, { 40,44,65,255 }); cy += 4;
 
-    // ---- Section: PC TRACE ----
-    DrawText("-- PC TRACE (recent) --", cx, cy, F, { 80,120,200,255 });
+    // ---- DISASSEMBLY (window around current PC) ----
+    DrawText("-- DISASSEMBLY --", cx, cy, F, { 80,120,200,255 });
     cy += LH + 2;
 
-    int traceCount = (int)pcTrace.size();
-    for (int i = traceCount - 1; i >= 0; i--) {
-        char tb[16]; snprintf(tb, sizeof(tb), "%08X", pcTrace[i]);
-        float fade = 0.4f + 0.6f * (float)(traceCount - 1 - i) / (float)(traceCount > 1 ? traceCount - 1 : 1);
-        // newest = bright, oldest = dim
-        uint8_t bright = (uint8_t)(fade * 220);
-        Color tc = (i == traceCount - 1) ? Color{ 120,230,120,255 }
-        : Color{ bright,bright,(uint8_t)(bright / 2),255 };
-        DrawText(tb, cx, cy, F, tc);
+    bool thumbMode = (cpu.cpsr >> 5) & 1;
+    int instrSize = thumbMode ? 2 : 4;
+    uint32_t curPC = cpu.reg[15];
+    uint32_t curInstrAddr = hasSteppedOnce ? (curPC - instrSize) : curPC;
+
+    const int DISAS_BEFORE = 6;
+    uint32_t startAddr = curInstrAddr - (uint32_t)(DISAS_BEFORE * instrSize);
+
+    auto rd16 = [&](uint32_t a) -> uint16_t { return bus.read16(a); };
+    auto rd32 = [&](uint32_t a) -> uint32_t { return bus.read32(a); };
+
+    int maxLines = (y + h - 10 - cy) / LH;
+    for (int i = 0; i < maxLines; i++) {
+        uint32_t a = startAddr + (uint32_t)(i * instrSize);
+        char mnem[96];
+        Disassembler::Decode(a, thumbMode, rd16, rd32, mnem, sizeof(mnem));
+
+        bool isCurrent = (a == curInstrAddr);
+        char line[140];
+        snprintf(line, sizeof(line), "%s%08X: %s", isCurrent ? "> " : "  ", a, mnem);
+
+        Color lc = isCurrent ? Color{ 255,230,90,255 } : Color{ 170,180,200,255 };
+        if (isCurrent) DrawRectangle(cx - 2, cy - 1, 480, LH, { 60,55,20,255 });
+        DrawText(line, cx, cy, F, lc);
         cy += LH;
-        if (cy > y + h - 10) break;
     }
 }
-
 // ============================================================
 //  Main Draw
 // ============================================================
