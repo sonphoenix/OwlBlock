@@ -19,6 +19,8 @@ Owl BLock/Release/
 
 # ROMs — copyrighted
 *.gba
+*.zip
+*.sav
 
 # Generated logs
 debug.txt
