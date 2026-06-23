@@ -22,10 +22,10 @@
 #define REG_IME         0x208   // interrupt master enable
 
 // ── DMA ─────────────────────────────────────────────────────────
-#define DMA0_BASE       0x040000B0
-#define DMA1_BASE       0x0BC
-#define DMA2_BASE       0x0C8
-#define DMA3_BASE       0x0D4
+#define DMA0_BASE   0x040000B0
+#define DMA1_BASE   0x040000BC
+#define DMA2_BASE   0x040000C8
+#define DMA3_BASE   0x040000D4
 #define DMA_SAD         0x0     // source address offset
 #define DMA_DAD         0x4     // destination address offset
 #define DMA_CNT         0x8     // count + control offset

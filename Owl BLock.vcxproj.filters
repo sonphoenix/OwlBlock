@@ -21,7 +21,7 @@
     </None>
     <None Include="lib\raylib.dll" />
     <None Include="roms\arm.gba" />
-    <None Include="roms\Ashita no Joe - Makka ni Moeagare! (J) [t1].gba" />
+    <None Include="roms\anj.gba" />
     <None Include="roms\bios.gba" />
     <None Include="roms\gba-frame-test.gba" />
     <None Include="roms\Hajime no Ippo - The Fighting English.gba" />
@@ -39,6 +39,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DebugView.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\apu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -62,6 +68,21 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="include\rlgl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\DebugView.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nlohmann\json.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\nlohmann\adl_serializer.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\apu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Disassembler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

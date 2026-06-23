@@ -139,7 +139,7 @@
     <None Include="bios\gba_bios.bin" />
     <None Include="lib\raylib.dll" />
     <None Include="roms\arm.gba" />
-    <None Include="roms\Ashita no Joe - Makka ni Moeagare! (J) [t1].gba" />
+    <None Include="roms\anj.gba" />
     <None Include="roms\bios.gba" />
     <None Include="roms\gba-frame-test.gba" />
     <None Include="roms\Hajime no Ippo - The Fighting English.gba" />
@@ -147,15 +147,22 @@
     <None Include="roms\thumb.gba" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\apu.cpp" />
     <ClCompile Include="src\bus.cpp" />
     <ClCompile Include="src\cpu.cpp" />
+    <ClCompile Include="src\DebugView.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\PPU.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\apu.h" />
     <ClInclude Include="include\bus.h" />
     <ClInclude Include="include\cpu.h" />
+    <ClInclude Include="include\DebugView.h" />
+    <ClInclude Include="include\Disassembler.h" />
     <ClInclude Include="include\gba_registers.h" />
+    <ClInclude Include="include\nlohmann\adl_serializer.hpp" />
+    <ClInclude Include="include\nlohmann\json.hpp" />
     <ClInclude Include="include\PPU.h" />
     <ClInclude Include="include\raylib.h" />
     <ClInclude Include="include\raymath.h" />
