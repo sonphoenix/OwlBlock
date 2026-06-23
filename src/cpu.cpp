@@ -2,150 +2,250 @@
 #include"gba_registers.h"
 #include <iomanip>
 
+#if GBA_DEBUG
+#define DLOG(x) do { dbg << x; dbg.flush(); } while(0)
+#else
+#define DLOG(x) do {} while(0)
+#endif
+
+
 extern std::ofstream dbg;
 
-void CPU::switchMode(uint8_t newMode, bool returning) {
+void CPU::setCPSR(uint32_t val) {
+    uint8_t mode = val & 0x1F;
+    if (mode != 0x10 && mode != 0x11 && mode != 0x12 &&
+        mode != 0x13 && mode != 0x17 && mode != 0x1B && mode != 0x1F) {
+        dbg << "[BAD_CPSR] val=0x" << std::hex << val
+            << " PC=0x" << reg[15] << "\n";
+        dbg.flush();
+    }
+    cpsr = val;
+}
+
+void CPU::switchMode(uint8_t newMode) {
     uint8_t oldMode = cpsr & 0x1F;
+    /*dbg << "[switchMode] " << std::hex << (int)oldMode << "->" << (int)newMode
+            << " spsr_svc=0x" << spsr_svc
+        << " reg[13]=0x" << reg[13] << " reg[14]=0x" << reg[14] << "\n";
+    dbg.flush();*/
+    // -----------------
+    // SAVE CURRENT BANK
+    // -----------------
 
-    // --- STEP 1: Bank OUT (Save current regs to the OLD mode's bank) ---
+    if (oldMode != MODE_FIQ && newMode == MODE_FIQ) {
+        // Entering FIQ: save user R8-R12 before FIQ bank takes over
+        for (int i = 0; i < 5; i++)
+            reg_user[i] = reg[8 + i];
+    }
+
     if (oldMode == MODE_FIQ) {
-        for (int i = 0; i < 5; i++) reg_fiq[i] = reg[i + 8];
-        reg_fiq[5] = reg[13]; reg_fiq[6] = reg[14];
-    }
-    else if (oldMode == MODE_IRQ) {
-        reg_irq[0] = reg[13]; reg_irq[1] = reg[14];
-    }
-    else if (oldMode == MODE_SUPERVISOR) {
-        reg_svc[0] = reg[13]; reg_svc[1] = reg[14];
-    }
-    else if (oldMode == MODE_ABORT) {
-        reg_abt[0] = reg[13]; reg_abt[1] = reg[14];
-    }
-    else if (oldMode == MODE_UNDEFINED) {
-        reg_und[0] = reg[13]; reg_und[1] = reg[14];
-    }
-    else { // User or System
-        for (int i = 0; i < 5; i++) reg_user[i] = reg[i + 8];
-        reg_user[5] = reg[13]; reg_user[6] = reg[14];
+        // Leaving FIQ: save FIQ R8-R12
+        for (int i = 0; i < 5; i++)
+            reg_fiq[i] = reg[8 + i];
     }
 
-    // --- STEP 2: Update CPSR / SPSR ---
-    if (returning) {
-        // Restore the full CPSR from the SPSR of the mode we are LEAVING
-        switch (oldMode) {
-        case MODE_FIQ:        cpsr = spsr_fiq; break;
-        case MODE_IRQ:        cpsr = spsr_irq; break;
-        case MODE_SUPERVISOR: cpsr = spsr_svc; break;
-        case MODE_ABORT:      cpsr = spsr_abt; break;
-        case MODE_UNDEFINED:  cpsr = spsr_und; break;
-        default: break; // User/System have no SPSR to return from
-        }
-        // The mode we are switching TO is now defined by the restored CPSR
-        newMode = cpsr & 0x1F;
-    }
-    else {
-        // Normal mode switch (e.g., MSR or Exception Entry)
-        // If entering a privileged mode, save current CPSR into the new SPSR
-        switch (newMode) {
-        case MODE_FIQ:        spsr_fiq = cpsr; break;
-        case MODE_IRQ:        spsr_irq = cpsr; break;
-        case MODE_SUPERVISOR: spsr_svc = cpsr; break;
-        case MODE_ABORT:      spsr_abt = cpsr; break;
-        case MODE_UNDEFINED:  spsr_und = cpsr; break;
-        }
-        cpsr = (cpsr & ~0x1F) | newMode;
+    switch (oldMode) {
+    case MODE_FIQ:
+        reg_fiq[5] = reg[13];
+        reg_fiq[6] = reg[14];
+        break;
+    case MODE_IRQ:
+        reg_irq[0] = reg[13];
+        reg_irq[1] = reg[14];
+        break;
+    case MODE_SUPERVISOR:
+        reg_svc[0] = reg[13];
+        reg_svc[1] = reg[14];
+        break;
+    case MODE_ABORT:
+        reg_abt[0] = reg[13];
+        reg_abt[1] = reg[14];
+        break;
+    case MODE_UNDEFINED:
+        reg_und[0] = reg[13];
+        reg_und[1] = reg[14];
+        break;
+    default:
+        // USER or SYSTEM: reg[13]/reg[14] are the user-bank regs.
+        reg_user[5] = reg[13];
+        reg_user[6] = reg[14];
+        break;
     }
 
-    // --- STEP 3: Bank IN (Load regs from the NEW mode's bank into active 'reg') ---
+    // -----------------
+    // RESTORE NEW BANK
+    // -----------------
+
     if (newMode == MODE_FIQ) {
-        for (int i = 0; i < 5; i++) reg[i + 8] = reg_fiq[i];
-        reg[13] = reg_fiq[5]; reg[14] = reg_fiq[6];
+        for (int i = 0; i < 5; i++)
+            reg[8 + i] = reg_fiq[i];
     }
-    else {
-        // All non-FIQ modes use User/System R8-R12
-        for (int i = 0; i < 5; i++) reg[i + 8] = reg_user[i];
+    else if (oldMode == MODE_FIQ) {
+        // Leaving FIQ: restore user R8-R12
+        for (int i = 0; i < 5; i++)
+            reg[8 + i] = reg_user[i];
+    }
 
-        if (newMode == MODE_IRQ) {
-            reg[13] = reg_irq[0]; reg[14] = reg_irq[1];
-        }
-        else if (newMode == MODE_SUPERVISOR) {
-            reg[13] = reg_svc[0]; reg[14] = reg_svc[1];
-        }
-        else if (newMode == MODE_ABORT) {
-            reg[13] = reg_abt[0]; reg[14] = reg_abt[1];
-        }
-        else if (newMode == MODE_UNDEFINED) {
-            reg[13] = reg_und[0]; reg[14] = reg_und[1];
-        }
-        else { // User or System
-            reg[13] = reg_user[5]; reg[14] = reg_user[6];
-        }
+    switch (newMode) {
+    case MODE_FIQ:
+        reg[13] = reg_fiq[5];
+        reg[14] = reg_fiq[6];
+        break;
+    case MODE_IRQ:
+        reg[13] = reg_irq[0];
+        reg[14] = reg_irq[1];
+        break;
+    case MODE_SUPERVISOR:
+        reg[13] = reg_svc[0];
+        reg[14] = reg_svc[1];
+        break;
+    case MODE_ABORT:
+        reg[13] = reg_abt[0];
+        reg[14] = reg_abt[1];
+        break;
+    case MODE_UNDEFINED:
+        reg[13] = reg_und[0];
+        reg[14] = reg_und[1];
+        break;
+    default:
+        // USER or SYSTEM
+        reg[13] = reg_user[5];
+        reg[14] = reg_user[6];
+        break;
     }
 }
 
-void CPU::skipBIOS() {
-    //printf("\nSKIP GBA BIOS - Jumping directly to ROM\n");
 
-    // Clear WRAM (0x3007E00 to 0x3008000) - stacks and BIOS IRQ vector/flags
+
+void CPU::restoreCPSRFromSPSR() {
+    uint8_t oldMode = cpsr & 0x1F;
+    uint32_t spsr = 0;
+    switch (oldMode) {
+    case MODE_FIQ:        spsr = spsr_fiq; break;
+    case MODE_IRQ:        spsr = spsr_irq; break;
+    case MODE_SUPERVISOR: spsr = spsr_svc; break;
+    case MODE_ABORT:      spsr = spsr_abt; break;
+    case MODE_UNDEFINED:  spsr = spsr_und; break;
+    default:
+        dbg << "[CPSR_RESTORE_ABORT_NO_SPSR]\n";
+        return;
+    }
+
+    uint8_t newMode = spsr & 0x1F;
+    bool valid = (newMode == 0x10 || newMode == 0x11 || newMode == 0x12 ||
+        newMode == 0x13 || newMode == 0x17 || newMode == 0x1B ||
+        newMode == 0x1F);
+    if (!valid) {
+        dbg << "[RESTORE_BAD_SPSR] spsr=0x" << std::hex << spsr
+            << " oldMode=0x" << (int)oldMode
+            << " PC=0x" << reg[15] << "\n";
+        dbg.flush();
+        return;
+    }
+
+    if (newMode != oldMode)
+        switchMode(newMode);
+    cpsr = spsr;
+}
+
+
+void CPU::skipBIOS() {
+    // Clear WRAM stacks and BIOS IRQ vector/flags
     for (uint32_t i = 0x3007E00; i < 0x3008000; i++) {
         bus.write8(i, 0);
     }
 
     // Clear R0-R12
-    for (int i = 0; i < 13; i++) {
-        reg[i] = 0;
-    }
+    for (int i = 0; i < 13; i++) reg[i] = 0;
 
     // Clear banked registers
-    reg_svc[1] = 0;   // R14_svc
-    reg_irq[1] = 0;   // R14_irq
-    spsr_svc = 0;
-    spsr_irq = 0;
+    reg_svc[0] = 0x03007FE0;  // SP_svc
+    reg_svc[1] = 0x00000000;  // LR_svc
+    reg_irq[0] = 0x03007FA0;  // SP_irq
+    reg_irq[1] = 0x00000000;  // LR_irq
+    spsr_svc = 0x00000000;
+    spsr_irq = 0x00000000;
 
-    // Set CPSR to System mode
-    cpsr = 0x0000001F;  // System mode, ARM, IRQ/FIQ enabled
+    // System mode, ARM, IRQ/FIQ enabled
+    cpsr = 0x0000001F;
+    reg[13] = 0x03007F00;  // SP_usr
+    reg[14] = 0x00000000;  // LR_usr
+    reg[15] = 0x08000000;  // jump to ROM
 
-    // Set stack pointers
-    reg_svc[0] = 0x03007FE0;   // SP_svc
-    reg_irq[0] = 0x03007FA0;   // SP_irq
-    reg[13] = 0x03007F00;      // SP (User/System)
+    // Post-BIOS IO state
+    bus.io[0x00] = 0x00; bus.io[0x01] = 0x00;  // DISPCNT
+    bus.io[0x04] = 0x00; bus.io[0x05] = 0x00;  // DISPSTAT
+    bus.io[0x06] = 0x00; bus.io[0x07] = 0x00;  // VCOUNT
+    bus.io[0x88] = 0x00; bus.io[0x89] = 0x02;  // SOUNDBIAS
+    bus.io[0x130] = 0xFF; bus.io[0x131] = 0x03; // KEYINPUT
 
-    // Jump to ROM entry point
-    reg[15] = MEM_ROM;
+    // Serial — prevents fake link cable detection
+    bus.io[0x128] = 0x00; bus.io[0x129] = 0x00; // SIOCNT
+    bus.io[0x134] = 0x80; bus.io[0x135] = 0x80; // RCNT
 
-    // Ensure ARM mode (clear Thumb bit)
-    cpsr &= ~(1 << 5);
+    // BIOS interrupt state
+    bus.write32(0x03FFFFF8, 0x00000000);
+    bus.write32(0x03FFFFFC, 0x00000000);
+    for (int i = 0; i < 8; i++) bus.iwram[0x7FF8 + i] = 0;
+
+    bus.postflg = 1;
+    cpsr &= ~(1 << 5); // ensure ARM mode
+    
 }
 
-void CPU::Step() {
+int CPU::Step() {
+    static uint32_t stepCounter = 0;
+    stepCounter++;
 
-    if (halted) {
-        //do nothing
-        return;
+    /*dbg << "[STEP " << std::dec << stepCounter << "] PC=0x" << std::hex << reg[15]
+        << " mode=0x" << (cpsr & 0x1F)
+        << " T=" << ((cpsr >> 5) & 1)
+        << " I=" << ((cpsr >> 7) & 1)
+        << " IME=" << (bus.io[0x208] | (bus.io[0x209] << 8))
+        << " IE=" << (bus.io[0x200] | (bus.io[0x201] << 8))
+        << " IF=" << (bus.io[0x202] | (bus.io[0x203] << 8))
+        << " VCOUNT=" << std::dec << (int)bus.vcount
+        << " DISPSTAT=0x" << std::hex << (int)bus.io[0x04]
+        << " halted=" << halted << "\n";*/
+
+    if (reg[15] >= 0xFF000000) {
+        dbg << "[CRASH] PC went to 0x" << std::hex << reg[15]
+            << " LR=0x" << reg[14]
+            << " SP=0x" << reg[13]
+            << " CPSR=0x" << cpsr << "\n";
+        dbg.flush();
     }
-    uint32_t fetch_pc = reg[15]; // In ARM, reg[15] is usually the instruction being executed + 8
+    if (halted) return 1;
 
-    if (cpsr & (1 << 5)) { // THUMB
-        uint16_t instr = bus.read16(fetch_pc);
-
-        // BIOS Protection: Even in Thumb mode, the latch is updated 
-        // with the 32-bit word aligned at that address.
-        if (fetch_pc < 0x4000) {
-            bus.updateBiosLatch(bus.read32(fetch_pc & ~3));
+    static uint32_t last_pc = 0;
+    static int same_pc_count = 0;
+    if (reg[15] == last_pc) {
+        if (++same_pc_count == 2000000) {
+            DLOG("[STUCK] PC=0x" << std::hex << reg[15]
+                << " LR=0x" << reg[14] << "\n");
+            same_pc_count = 0;
         }
+    }
+    else {
+        same_pc_count = 0;
+        last_pc = reg[15];
+    }
 
+    uint32_t prev_pc = reg[15];
+
+    if (cpsr & (1 << 5)) {
+        uint16_t instr = bus.read16(prev_pc);
+        if (prev_pc < 0x4000)
+            bus.updateBiosLatch(bus.read32(prev_pc & ~3));
         reg[15] += 2;
-        executeThumb(instr);
+        return executeThumb(instr);
     }
-    else { // ARM
-        uint32_t instr = bus.read32(fetch_pc);
-
-        if (fetch_pc < 0x4000) {
+    else {
+        uint32_t instr = bus.read32(prev_pc);
+        if (prev_pc < 0x4000)
             bus.updateBiosLatch(instr);
-        }
-
         reg[15] += 4;
-        Execute(instr);
+        return Execute(instr);
     }
 }
 
@@ -158,7 +258,6 @@ uint32_t CPU::getReg(uint8_t index) {
     }
     return reg[index];
 }
-
 
 bool const CPU::checkCondition(uint32_t cond) {
     bool N = (cpsr >> 31) & 1;
@@ -182,31 +281,33 @@ bool const CPU::checkCondition(uint32_t cond) {
     case 0b1100: return !Z && N == V;// GT
     case 0b1101: return Z || N != V; // LE
     case 0b1110: return true;        // AL always
+    case 0b1111: return false; // NV — never execute on ARM7TDMI
     default:     return true;
     }
 }
 
 void CPU::executeBranch(uint32_t instruction) {
-    //std::cout << "execute branch called \n";
     bool link = (instruction >> 24) & 1;
     int32_t offset = instruction & 0xFFFFFF;
+    if (offset & 0x800000) offset |= 0xFF000000;
+    uint32_t pc = reg[15] + 4;
 
-    if (offset & 0x800000) offset |= 0xFF000000; // Sign extend
+    dbg << "[BRANCH] reg15_before=0x" << std::hex << reg[15]
+        << " offset_raw=0x" << (instruction & 0xFFFFFF)
+        << " offset_signed=0x" << offset
+        << " pc_calc=0x" << pc
+        << " target=0x" << (pc + (offset << 2)) << "\n";
+    dbg.flush();
 
     if (link) {
-        // Return address is the instruction right after the branch.
-        // If reg[15] is currently (InstrAddr + 4), then reg[15] is the return addr.
-        reg[14] = reg[15];
+        reg[14] = pc - 4;
     }
-
-    // Target = (Current Instruction Address + 8) + (offset * 4)
-    reg[15] = getReg(15) + (offset << 2);
+    reg[15] = pc + (offset << 2);
 }
-
 
 void CPU::executeBx(uint32_t instruction) {
     uint8_t Rn = instruction & 0xF;
-    uint32_t target = getReg(Rn); // Use getReg!
+    uint32_t target = getReg(Rn); 
 
     if (target & 1) {
         cpsr |= (1u << 5);        // THUMB
@@ -233,8 +334,7 @@ uint32_t CPU::apply_shift(uint32_t value, uint8_t shift) {
         amount = (shift >> 3) & 0x1F;
         if (amount == 0) {
             switch (type) {
-            case 0b00: // LSL #0 — no-op, carry unchanged
-                return value;
+            case 0b00: return value;  // LSL #0 — no-op
             case 0b01: // LSR #0 means LSR #32
                 ((value >> 31) & 1) ? (cpsr |= (1u << 29)) : (cpsr &= ~(1u << 29));
                 return 0;
@@ -252,7 +352,10 @@ uint32_t CPU::apply_shift(uint32_t value, uint8_t shift) {
     else {
         // Register shift
         uint8_t Rs = (shift >> 4) & 0xF;
-        amount = reg[Rs] & 0xFF;
+        // Rs=PC: ARM spec says use instr_addr+8 = reg[15]-4
+        // (reg[15] during execute = base_addr+12 = instr_addr+12)
+        uint32_t rsVal = (Rs == 15) ? (reg[15] - 4) : reg[Rs];
+        amount = rsVal & 0xFF;
         if (amount == 0) return value; // carry unchanged
 
         if (amount >= 32) {
@@ -266,10 +369,9 @@ uint32_t CPU::apply_shift(uint32_t value, uint8_t shift) {
             case 0b10: // ASR
                 ((value >> 31) & 1) ? (cpsr |= (1u << 29)) : (cpsr &= ~(1u << 29));
                 return (uint32_t)((int32_t)value >> 31);
-            case 0b11: // ROR — wraps
+            case 0b11: // ROR — wraps mod 32
                 amount %= 32;
                 if (amount == 0) {
-                    // amount was exactly a multiple of 32 — value unchanged, carry = bit 31
                     ((value >> 31) & 1) ? (cpsr |= (1u << 29)) : (cpsr &= ~(1u << 29));
                     return value;
                 }
@@ -322,29 +424,13 @@ void CPU::setFlags(uint32_t result, uint64_t full, uint32_t Rn, uint32_t op2, bo
 }
 
 void CPU::executeDataProcessing(uint32_t instruction) {
+    uint32_t oldCpsr = cpsr;
     uint8_t immediate = (instruction >> 25) & 1;
     uint8_t opcode = (instruction >> 21) & 0xF;
     uint8_t Rd = (instruction >> 12) & 0xF;
     uint8_t S = (instruction >> 20) & 1;
     uint8_t Rn = (instruction >> 16) & 0xF;
-
     bool op2_is_reg_shift = !immediate && ((instruction >> 4) & 1);
-
-    // ADR detection: ADD or SUB with Rn=15, immediate operand
-    if (Rn == 15 && ((instruction >> 25) & 1) == 1 && (opcode == 0b0100 || opcode == 0b0010)) {
-        uint32_t pc_val = getReg(15);
-        uint8_t rotation = (instruction >> 8) & 0xF;
-        uint8_t imm8 = instruction & 0xFF;
-        uint32_t offset = rotate_right(imm8, rotation * 2);
-        uint32_t computed = (opcode == 0b0100) ? (pc_val + offset) : (pc_val - offset);
-
-        dbg << "ADR: PC=" << std::hex << pc_val
-            << " offset=0x" << offset
-            << " -> r" << std::dec << (int)Rd
-            << " = 0x" << std::hex << computed << "\n";
-        dbg.flush();
-    }
-
     auto getOp2 = [&](uint8_t RnIndex) -> uint32_t {
         if (immediate) {
             uint8_t rotation = (instruction >> 8) & 0xF;
@@ -369,25 +455,19 @@ void CPU::executeDataProcessing(uint32_t instruction) {
             return apply_shift(rm_val, shift_field);
         }
         };
-
-    // Only adjust for reg-shift case; getReg(15) already returns instr+8
     uint32_t rnVal;
     if (Rn == 15 && op2_is_reg_shift) {
-        rnVal = getReg(15) + 4;  // instr+12
+        rnVal = getReg(15) + 4;
     }
     else {
         rnVal = getReg(Rn);
     }
-
-    // Save carry before getOp2 can clobber it via rotation encoding
     uint32_t carryIn = (cpsr >> 29) & 1;
-
     uint32_t op2 = getOp2(Rn);
     uint32_t result = 0;
     uint64_t full = 0;
     bool isArithmetic = false;
     bool isSubtract = false;
-
     switch (opcode) {
     case 0b0000: result = rnVal & op2; break;
     case 0b0001: result = rnVal ^ op2; break;
@@ -406,29 +486,30 @@ void CPU::executeDataProcessing(uint32_t instruction) {
     case 0b1110: result = rnVal & ~op2; break;
     case 0b1111: result = ~op2; break;
     }
-
     if (isArithmetic) result = (uint32_t)full;
     bool writesResult = (opcode < 0b1000 || opcode > 0b1011);
-    // After computing result, before writing to Rd:
     if (Rd == 15) {
         if (S) {
             uint8_t mode = cpsr & 0x1F;
             if (mode != MODE_USER && mode != MODE_SYSTEM) {
-                // Exception return: restore CPSR from SPSR
-                switchMode(mode, true);  // returning=true
-                reg[15] = result & ~3;
-                return;
+                restoreCPSRFromSPSR();
             }
         }
-        reg[15] = result & ~3;
-        return;
+        if (writesResult) {
+            if (cpsr & (1 << 5))
+                reg[15] = result & ~1;
+            else
+                reg[15] = result & ~3;
+            return;
+        }
     }
-
-    if (writesResult) {
-        reg[Rd] = result;
-    }
-
+    else {
+        if (writesResult) {
+            reg[Rd] = result;
+          }
+  }
     if (S) {
+        uint32_t beforeFlags = cpsr;
         if (isArithmetic) {
             setFlags(result, full, rnVal, op2, isSubtract);
         }
@@ -438,8 +519,6 @@ void CPU::executeDataProcessing(uint32_t instruction) {
         }
     }
 }
-
-
 
 void CPU::executeMultiply(uint32_t instruction) {
     uint8_t A = (instruction >> 21) & 1;
@@ -475,7 +554,7 @@ void CPU::executeMultiplyLong(uint32_t instruction) {
     if (U) { // signed
         int64_t sresult = (int64_t)(int32_t)getReg(Rm) * (int64_t)(int32_t)getReg(Rs);
         if (A) {
-            int64_t acc = ((int64_t)getReg(RdHi) << 32) | (int32_t)getReg(RdLo);
+            int64_t acc = ((int64_t)getReg(RdHi) << 32) | (uint64_t)getReg(RdLo);
             sresult += acc;
         }
         result = sresult;
@@ -508,58 +587,53 @@ void CPU::executeLoadStore(uint32_t instruction) {
     uint8_t Rn = (instruction >> 16) & 0xF;
     uint8_t Rd = (instruction >> 12) & 0xF;
 
-    // step 1 — calculate offset
     uint32_t offset;
     if (I == 0) {
-        offset = instruction & 0xFFF;           // plain 12-bit number
+        offset = instruction & 0xFFF;
     }
     else {
+        uint32_t savedCpsr = cpsr;
         uint8_t Rm = instruction & 0xF;
         uint8_t shift = (instruction >> 4) & 0xFF;
-        offset = apply_shift(getReg(Rm), shift);   // register + shift (fixed)
+        offset = apply_shift(getReg(Rm), shift);
+        cpsr = savedCpsr;
     }
 
-    // step 2 — calculate the full address (add or subtract offset)
-    uint32_t base = getReg(Rn);  
+    uint32_t base = (Rn == 15) ? ((reg[15] + 4) & ~3) : getReg(Rn);
     uint32_t address = U ? (base + offset) : (base - offset);
-
-    // step 3 — pick effective address (pre: use offset address, post: use base)
     uint32_t effective = P ? address : base;
 
-    // step 4 — load or store
     if (L) {
-        // LOAD
         if (B) {
-            reg[Rd] = bus.read8(effective);                    // LDRB — 1 byte
+            reg[Rd] = bus.read8(effective);
         }
         else {
-            uint32_t value = bus.read32(effective & ~3);       // align to 4 bytes
-            uint8_t rotation = (effective & 3) * 8;           // misalignment amount
-            reg[Rd] = rotate_right(value, rotation);           // GBA rotation behaviour
+            uint32_t value = bus.read32(effective & ~3);
+            uint8_t rotation = (effective & 3) * 8;
+            reg[Rd] = rotate_right(value, rotation);
         }
+
     }
     else {
-        // STORE
         if (B) {
-            bus.write8(effective, reg[Rd] & 0xFF);             // STRB — 1 byte
+            bus.write8(effective, reg[Rd] & 0xFF);
         }
         else {
             if (Rd == 15) {
-                bus.write32(effective & ~3, reg[Rd]+8);
+                bus.write32(effective & ~3, reg[Rd] + 8);
                 return;
             }
-            bus.write32(effective & ~3, reg[Rd]);                   // STR  — 4 bytes
+            bus.write32(effective & ~3, reg[Rd]);
         }
     }
 
-    // step 5 — writeback
     if (!P || W) {
-        if (!L || (Rn != Rd)) { // Don't writeback if LDR overwrote Rn
+        if (!L || (Rn != Rd)) {
             reg[Rn] = address;
         }
     }
-
 }
+
 
 void CPU::executeHalfwordTransfer(uint32_t instruction) {
     uint8_t P = (instruction >> 24) & 1;
@@ -668,7 +742,6 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
     uint16_t regList = instruction & 0xFFFF;
     uint32_t base = reg[Rn];
 
-    // Empty list: transfer PC only, base updated as if 16 registers
     if (regList == 0) {
         uint32_t addr = base;
         if (!U) addr -= 64;
@@ -677,7 +750,7 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
             reg[15] = bus.read32(addr & ~3) & ~3;
         }
         else {
-            bus.write32(addr & ~3, reg[15] + 8); // PC+12
+            bus.write32(addr & ~3, reg[15] + 8);
         }
         if (W) reg[Rn] = U ? (base + 64) : (base - 64);
         return;
@@ -686,14 +759,12 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
     int count = 0;
     for (int i = 0; i < 16; i++) if (regList & (1 << i)) count++;
 
-    // Find lowest register in list (needed for STM base register rule)
     int lowestReg = -1;
     for (int i = 0; i < 16; i++) {
         if (regList & (1 << i)) { lowestReg = i; break; }
     }
 
     uint32_t writebackVal = U ? (base + count * 4) : (base - count * 4);
-
     uint32_t address = base;
     if (!U) address -= (count * 4);
     if (P == U) address += 4;
@@ -703,11 +774,10 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
             if (L) {
                 uint32_t val = bus.read32(address & ~3);
                 if (S && !(regList & (1 << 15))) {
-                    // Load into user bank registers
                     if (i >= 8 && i <= 12) reg_user[i - 8] = val;
-                    else if (i == 13)            reg_user[5] = val;
-                    else if (i == 14)            reg_user[6] = val;
-                    else                         reg[i] = val;
+                    else if (i == 13)      reg_user[5] = val;
+                    else if (i == 14)      reg_user[6] = val;
+                    else                   reg[i] = val;
                 }
                 else {
                     reg[i] = val;
@@ -717,19 +787,18 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
             else {
                 uint32_t val;
                 if (S) {
-                    // Store user bank registers
                     val = (i >= 8 && i <= 12) ? reg_user[i - 8] :
                         (i == 13) ? reg_user[5] :
                         (i == 14) ? reg_user[6] : reg[i];
                 }
                 else if (i == 15) {
-                    val = reg[15] + 8; // PC+12
+                    val = reg[15] + 8;
                 }
                 else if (W && i == Rn && i != lowestReg) {
-                    val = writebackVal; // not lowest: store writeback value
+                    val = writebackVal;
                 }
                 else {
-                    val = reg[i]; // lowest or no writeback: store original
+                    val = reg[i];
                 }
                 bus.write32(address & ~3, val);
             }
@@ -740,144 +809,181 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
     if (W && !(L && (regList & (1 << Rn)))) {
         reg[Rn] = writebackVal;
     }
+    if (L && S && (regList & (1 << 15))) {
+        dbg << "executeLoadStoreMultiple restoreCPSRFromSPSR saaar\n";
+        dbg.flush();
+        restoreCPSRFromSPSR();
+    }
 }
-
 void CPU::executePSRTransfer(uint32_t instruction) {
-    uint8_t Pd = (instruction >> 22) & 1; // 1=SPSR, 0=CPSR
-    uint8_t op = (instruction >> 21) & 1; // 1=MSR, 0=MRS
+    uint8_t Pd = (instruction >> 22) & 1;
+    uint8_t op = (instruction >> 21) & 1;
     uint8_t I = (instruction >> 25) & 1;
 
-    if (op) { // MSR
+    if (op) {
+        // MSR - write to PSR
         uint32_t value;
         if (I) {
             uint8_t rotation = (instruction >> 8) & 0xF;
-            uint8_t imm = (instruction & 0xFF);
+            uint8_t imm = instruction & 0xFF;
             value = rotate_right(imm, rotation * 2);
         }
         else {
             uint8_t Rm = instruction & 0xF;
-            value = getReg(Rm);  // Fixed: use getReg
+            value = getReg(Rm);
         }
 
         uint32_t mask = 0;
-        if ((instruction & 0x00080000)) mask |= 0xFF000000; // flags
-        if ((instruction & 0x00040000)) mask |= 0x00FF0000; // status
-        if ((instruction & 0x00020000)) mask |= 0x0000FF00; // extension
-        if ((instruction & 0x00010000)) mask |= 0x000000FF; // control
+        if (instruction & 0x00080000) mask |= 0xFF000000;
+        if (instruction & 0x00040000) mask |= 0x00FF0000;
+        if (instruction & 0x00020000) mask |= 0x0000FF00;
+        if (instruction & 0x00010000) mask |= 0x000000FF;
 
-        uint8_t currentMode = cpsr & 0x1F;
-        if (currentMode == MODE_USER) {
-            mask &= 0xFF000000;  // User mode can only change flags
-        }
-
-        if (Pd) { // SPSR
-            switch (currentMode) {
-            case MODE_IRQ: spsr_irq = (spsr_irq & ~mask) | (value & mask); break;
-            case MODE_FIQ: spsr_fiq = (spsr_fiq & ~mask) | (value & mask); break;
-            case MODE_SUPERVISOR: spsr_svc = (spsr_svc & ~mask) | (value & mask); break;
-            case MODE_UNDEFINED: spsr_und = (spsr_und & ~mask) | (value & mask); break;
-            case MODE_ABORT: spsr_abt = (spsr_abt & ~mask) | (value & mask); break;
-            default: break; // User/System can't write SPSR
-            }
-        }
-        else { // CPSR
-            uint32_t oldCpsr = cpsr;
-            uint32_t newCpsr = (cpsr & ~mask) | (value & mask);
-
-            // Update the non-mode bits immediately
-            cpsr = newCpsr;
-
-            uint8_t oldMode = oldCpsr & 0x1F;
-            uint8_t newMode = newCpsr & 0x1F;
-
-            if (oldMode != newMode) {
-                // Restore the OLD cpsr mode bits temporarily so switchMode 
-                // knows which bank we are currently in.
-                cpsr = (cpsr & ~0x1F) | oldMode;
-                switchMode(newMode, false);
-            }
-        }
-    }
-    else { // MRS (Move PSR to Register)
-        uint8_t Rd = (instruction >> 12) & 0xF;
+        uint8_t mode = cpsr & 0x1F;
+        if (mode == MODE_USER)
+            mask &= 0xFF000000;
 
         if (Pd) {
-            // Read SPSR based on current mode
-            uint8_t currentMode = cpsr & 0x1F;
-            switch (currentMode) {
-            case MODE_IRQ: reg[Rd] = spsr_irq; break;
-            case MODE_FIQ: reg[Rd] = spsr_fiq; break;
-            case MODE_SUPERVISOR: reg[Rd] = spsr_svc; break;
-            case MODE_UNDEFINED: reg[Rd] = spsr_und; break;
-            case MODE_ABORT: reg[Rd] = spsr_abt; break;
-            default: reg[Rd] = cpsr; break; // User/System mode has no SPSR
+            // Write SPSR
+            switch (mode) {
+            case MODE_IRQ:        spsr_irq = (spsr_irq & ~mask) | (value & mask); break;
+            case MODE_FIQ:        spsr_fiq = (spsr_fiq & ~mask) | (value & mask); break;
+            case MODE_SUPERVISOR:
+                spsr_svc = (spsr_svc & ~mask) | (value & mask);
+                dbg << "[MSR_SPSR_SVC] spsr_svc=0x" << std::hex << spsr_svc
+                    << " mask=0x" << mask << " value=0x" << value
+                    << " PC=0x" << reg[15] << "\n";
+                dbg.flush();
+            break;            case MODE_ABORT:      spsr_abt = (spsr_abt & ~mask) | (value & mask); break;
+            case MODE_UNDEFINED:  spsr_und = (spsr_und & ~mask) | (value & mask); break;
+            default: break;
             }
         }
         else {
-            // Read CPSR
+            // Write CPSR
+            uint32_t newCpsr = (cpsr & ~mask) | (value & mask);
+            uint8_t oldMode = cpsr & 0x1F;
+            uint8_t newMode = newCpsr & 0x1F;
+
+            // Validate new mode if control byte is being written
+            if (mask & 0xFF) {
+                bool valid = (newMode == 0x10 || newMode == 0x11 ||
+                    newMode == 0x12 || newMode == 0x13 ||
+                    newMode == 0x17 || newMode == 0x1B ||
+                    newMode == 0x1F);
+                if (!valid) {
+                    dbg << "[MSR_BAD_MODE] newMode=0x" << std::hex << (int)newMode
+                        << " value=0x" << value
+                        << " mask=0x" << mask
+                        << " PC=0x" << reg[15] << "\n";
+                    dbg.flush();
+                    return;
+                }
+            }
+
+            if (oldMode != newMode)
+                switchMode(newMode);
+            cpsr = newCpsr;
+        }
+    }
+    else {
+        // MRS - read PSR
+        uint8_t Rd = (instruction >> 12) & 0xF;
+        if (Pd) {
+            uint8_t mode = cpsr & 0x1F;
+            switch (mode) {
+            case MODE_IRQ:        reg[Rd] = spsr_irq; break;
+            case MODE_FIQ:        reg[Rd] = spsr_fiq; break;
+            case MODE_SUPERVISOR: reg[Rd] = spsr_svc; break;
+            case MODE_ABORT:      reg[Rd] = spsr_abt; break;
+            case MODE_UNDEFINED:  reg[Rd] = spsr_und; break;
+            default:              reg[Rd] = cpsr; break;
+            }
+        }
+        else {
             reg[Rd] = cpsr;
         }
 
-        // Fixed: Safety for PC
-        if (Rd == 15) {
+        if (Rd == 15)
             reg[15] &= ~3;
-        }
     }
 }
 
+
 void CPU::executeSWI(uint32_t instruction) {
-    // If Thumb, reg[15] is already PC+2. If ARM, reg[15] is already PC+4.
-    // This is exactly where we want to return.
-    uint32_t returnAddress = reg[15];
-
+    dbg << "swisaar \n";dbg.flush();
+    bool thumb = (cpsr >> 5) & 1;
+    uint32_t returnAddr = thumb ? reg[15] : reg[15] - 4;
     uint32_t oldCPSR = cpsr;
-    switchMode(MODE_SUPERVISOR, false);
-
-    spsr_svc = oldCPSR; // Ensure SPSR is explicitly saved
-    reg[14] = returnAddress;
-
-    cpsr |= (1 << 7);    // Disable IRQ
-    cpsr &= ~(1 << 5);   // Force ARM mode for BIOS
-    reg[15] = 0x08;      // SWI Vector
+    spsr_svc = oldCPSR;
+    switchMode(MODE_SUPERVISOR);
+    reg[14] = returnAddr;
+    cpsr = (oldCPSR & ~0xBF) | MODE_SUPERVISOR | (1 << 7);
+    reg[15] = 0x08;
 }
 
 void CPU::triggerIRQ() {
+    if ((cpsr & 0x1F) == 0x12) return;
+    if (cpsr & (1 << 7)) {
+        return;
+    }
+    dbg << "[IRQ_ENTER_BEGIN] PC=0x" << std::hex << reg[15]
+        << " CPSR=0x" << cpsr
+        << " T=" << ((cpsr >> 5) & 1)
+        << " MODE=0x" << (cpsr & 0x1F)
+        << "\n";
+    dbg.flush();
     halted = false;
     uint32_t oldCPSR = cpsr;
-
-    switchMode(MODE_IRQ, false);
-
-
-    reg[14] = reg[15];
+    bool thumb = (cpsr >> 5) & 1;
+    uint32_t returnAddr = thumb ? reg[15] + 2 : reg[15] + 4;
+    if (returnAddr >= 0x081E3560 && returnAddr <= 0x081E3580) {
+        dbg << "[IRQ_RETURN_NEAR_TM3LOOP] returnAddr=0x" << std::hex << returnAddr
+            << " interruptedPC=0x" << reg[15]
+            << "\n";
+        dbg.flush();
+    }
     spsr_irq = oldCPSR;
-
-    // 4. CRITICAL HARDWARE LOCK:
-    cpsr |= (1 << 7);    // Set I-bit to 1 (Disable IRQs)
-    cpsr &= ~(1 << 5);   // Clear T-bit (Switch to ARM mode)
-
-    // 5. Jump to IRQ Vector
+    switchMode(MODE_IRQ);
+    cpsr = (oldCPSR & ~0x3F) | MODE_IRQ | (1 << 7); // I=1, T=0
+    reg[14] = returnAddr;
     reg[15] = 0x18;
+
+    uint32_t handlerAddr = bus.read32(0x3007FFC);
+    dbg << "[ISR_ENTRY] handler=0x" << std::hex << handlerAddr
+        << " PC=0x" << reg[15] << "\n";
+
+    dbg << "[IRQ_ENTER_END] PC=0x" << std::hex << reg[15]
+        << " LR_irq=0x" << reg[14]
+        << " SPSR_irq=0x" << spsr_irq
+        << " CPSR=0x" << cpsr << "\n";
+    dbg.flush();
 }
 void CPU::triggerFIQ() {
-    if (cpsr & (1 << 6)) return; // Check F-bit (FIQ mask)
-
-    //uint32_t oldCPSR = cpsr;
-    switchMode(MODE_FIQ, false);
-    //spsr_fiq = oldCPSR;
-
+    dbg << "[FIQ_TRIGGER] PC=0x" << std::hex << reg[15]
+        << " CPSR=0x" << cpsr << "\n";
+    dbg.flush();
+    if (cpsr & (1 << 6)) {
+        dbg << "[FIQ_MASKED]\n";
+        dbg.flush();
+        return;
+    }
+    uint32_t oldCPSR = cpsr;
+    spsr_fiq = oldCPSR;
+    switchMode(MODE_FIQ);
+    cpsr = (oldCPSR & 0xF0000000) | MODE_FIQ | (1 << 7) | (1 << 6);
+    cpsr &= ~(1 << 5);
     reg[14] = reg[15] + 4;
-    cpsr |= (1 << 7) | (1 << 6); // FIQ disables BOTH IRQ and FIQ
-    cpsr &= ~(1 << 5);           // Force ARM mode
-    reg[15] = 0x1C;              // Jump to FIQ Vector
+    reg[15] = 0x1C;
 }
 
-void CPU::Execute(uint32_t instruction) {
+int CPU::Execute(uint32_t instruction) {
     uint8_t condition = (instruction >> 28);
-    if (!checkCondition(condition)) return;
+    if (!checkCondition(condition)) return 1;
 
     if ((instruction & 0x0FFFFFF0) == 0x012FFF10) {
         executeBx(instruction);
-        return;
+        return 3;
     }
 
     uint8_t type = (instruction >> 25) & 0x7;
@@ -885,7 +991,7 @@ void CPU::Execute(uint32_t instruction) {
     switch (type) {
     case 0b101:
         executeBranch(instruction);
-        break;
+        return 3;
 
     case 0b000:
     case 0b001: {
@@ -893,63 +999,61 @@ void CPU::Execute(uint32_t instruction) {
         bool bit4 = (instruction >> 4) & 1;
         bool bit7 = (instruction >> 7) & 1;
 
-        // SWP/SWPB
         if ((instruction & 0x0FB00FF0) == 0x01000090) {
             executeSWP(instruction);
+            return 3;
         }
-        // MRS: bits 11-0 are all 0 (SBZ), so the 0x0FFF mask catches it safely
         else if ((instruction & 0x0FBF0FFF) == 0x010F0000) {
             executePSRTransfer(instruction);
+            return 1;
         }
-        // MSR register: bit25=0, bit4=0 (bits 11-4 are SBZ in register form)
         else if (!bit25 && !bit4 && (instruction & 0x0DB0F000) == 0x0120F000) {
             executePSRTransfer(instruction);
+            return 1;
         }
-        // MSR immediate: bit25=1, bits27-24=0011, bits23,21,20=0,1,0, bits15-12=1111
         else if (bit25 && (instruction & 0x0FB0F000) == 0x0320F000) {
             executePSRTransfer(instruction);
+            return 1;
         }
-        // Multiply: bits27-22=000000, bits7-4=1001
         else if (!bit25 && ((instruction >> 22) & 0x3F) == 0
             && (instruction & 0xF0) == 0x90) {
             executeMultiply(instruction);
+            return 2;
         }
-        // Multiply Long: bits27-23=00001, bits7-4=1001
         else if (!bit25 && ((instruction >> 23) & 0x1F) == 1
             && (instruction & 0xF0) == 0x90) {
             executeMultiplyLong(instruction);
+            return 3;
         }
-        // Halfword/Signed transfer: bit25=0, bit7=1, bit4=1, bits6-5 != 00
         else if (!bit25 && bit7 && bit4 && ((instruction >> 5) & 0x3) != 0) {
             executeHalfwordTransfer(instruction);
+            return 2;
         }
         else {
             executeDataProcessing(instruction);
+            return 1;
         }
-        break;
     }
 
     case 0b010:
     case 0b011:
         executeLoadStore(instruction);
-        break;
+        return 3;
 
     case 0b100:
         executeLoadStoreMultiple(instruction);
-        break;
+        return 4;
 
     case 0b110:
-        // Coprocessor — not used on GBA
-        break;
+        return 1;
 
     case 0b111:
-        dbg << "swiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
-        dbg.flush();
         executeSWI(instruction);
-        break;
+        return 3;
     }
-}
 
+    return 1;
+}
 //THUMB MODE 
 
 void CPU::thumbMoveShifted(uint16_t instruction) {
@@ -957,7 +1061,12 @@ void CPU::thumbMoveShifted(uint16_t instruction) {
     uint8_t offset = (instruction >> 6) & 0x1F;
     uint8_t Rs = (instruction >> 3) & 0x7;
     uint8_t Rd = instruction & 0x7;
-
+   /* dbg << "MoveShifted: instr=0x" << std::hex << instruction
+        << " shift_type=" << (int)shift_type
+        << " offset=" << std::dec << (int)offset
+        << " Rs=R" << (int)Rs << "=0x" << std::hex << reg[Rs]
+        << " Rd=R" << (int)Rd << "\n";
+    dbg.flush();*/
     uint32_t val = reg[Rs];
     uint32_t result = val;
 
@@ -1030,21 +1139,23 @@ void CPU::thumbMoveImmediate(uint16_t instruction) {
     uint8_t op = (instruction >> 11) & 0x3;
     uint8_t Rd = (instruction >> 8) & 0x7;
     uint8_t offset = instruction & 0xFF;  // unsigned, 0-255
-
     switch (op) {
     case 0b00: // MOV — only N, Z
         reg[Rd] = offset;
+        if (Rd == 0 && offset == 0x83) {
+            dbg << "[MOV_R0_83] realPC=0x" << std::hex << reg[15]
+                << " R0_after_mov=0x" << reg[0] << "\n";
+            dbg.flush();
+        }
         (reg[Rd] == 0) ? (cpsr |= (1u << 30)) : (cpsr &= ~(1u << 30)); // Z
         cpsr &= ~(1u << 31); // N always 0, offset fits in 8 bits
         break;
-
     case 0b01: { // CMP — doesn't write Rd
         uint32_t original = reg[Rd];
         uint64_t full = (uint64_t)original - offset;
         setFlags((uint32_t)full, full, original, (uint32_t)offset, true);
         break;
     }
-
     case 0b10: { // ADD
         uint32_t original = reg[Rd];
         uint64_t full = (uint64_t)original + offset;
@@ -1052,7 +1163,6 @@ void CPU::thumbMoveImmediate(uint16_t instruction) {
         setFlags(reg[Rd], full, original, (uint32_t)offset, false);
         break;
     }
-
     case 0b11: { // SUB
         uint32_t original = reg[Rd];
         uint64_t full = (uint64_t)original - offset;
@@ -1062,7 +1172,6 @@ void CPU::thumbMoveImmediate(uint16_t instruction) {
     }
     }
 }
-
 void CPU::thumbDataProcessing(uint16_t instruction) {
     uint8_t opcode = (instruction >> 6) & 0xF;
     uint8_t Rd = instruction & 0x7;
@@ -1252,47 +1361,49 @@ void CPU::thumbHiRegister(uint16_t instruction) {
     uint8_t Rd = rd_low | (MSBd << 3);
     uint8_t Rs = (instruction >> 3) & 0xF;
     uint8_t opcode = (instruction >> 8) & 0x3;
+
+    uint32_t pipeline_pc = reg[15] + 2;
+
     switch (opcode) {
-    case 0b00:
+    case 0b00: { // ADD
+        uint32_t op1 = (Rd == 15) ? pipeline_pc : reg[Rd];
+        uint32_t op2 = (Rs == 15) ? pipeline_pc : reg[Rs];
+        uint32_t result = op1 + op2;
         if (Rd == 15) {
-            reg[15] = (getReg(15) + reg[Rs]) & ~1u;  // use architectural PC, halfword-align result
+            reg[15] = result & ~1u;
         }
         else {
-            reg[Rd] += reg[Rs];
+            reg[Rd] = result;
         }
-        break;
-    case 0b01: {
-        uint64_t full = (uint64_t)reg[Rd] - reg[Rs];
-        uint32_t result = (uint32_t)full;
-        setFlags(result, full, reg[Rd], reg[Rs], true);
         break;
     }
-    case 0b10:
-        if (Rs == 15) {
-            reg[Rd] = getReg(15) & ~2u;
+    case 0b01: { // CMP
+        uint32_t op1 = (Rd == 15) ? pipeline_pc : reg[Rd];
+        uint32_t op2 = (Rs == 15) ? pipeline_pc : reg[Rs];
+        uint64_t full = (uint64_t)op1 - op2;
+        setFlags((uint32_t)full, full, op1, op2, true);
+        break;
+    }
+    case 0b10: { // MOV
+        uint32_t op2 = (Rs == 15) ? pipeline_pc : reg[Rs];
+        reg[Rd] = op2;
+        if (Rd == 15) {
+            reg[15] &= ~1u;
+        }
+        break;
+    }
+    case 0b11: { // BX
+        uint32_t op2 = (Rs == 15) ? pipeline_pc : reg[Rs];
+        if (op2 & 1) {
+            cpsr |= (1u << 5);
+            reg[15] = op2 & ~1u;
         }
         else {
-            reg[Rd] = reg[Rs];
-            if (Rd == 15) {
-                reg[15] &= ~1u;
-            }
+            cpsr &= ~(1u << 5);
+            reg[15] = op2 & ~3u;
         }
         break;
-    case 0b11:
-        if (MSBd == 0) { // BX
-            if (reg[Rs] & 1) { // bit 0 = 1 → switch to THUMB
-                cpsr |= (1u << 5);
-                reg[15] = reg[Rs] & ~1u;   // clear flag bit, address is halfword-aligned
-            }
-            else {              // bit 0 = 0 → stay in ARM
-                cpsr &= ~(1u << 5);
-                reg[15] = reg[Rs] & ~3u;   // word-align (ARM instructions are 4-byte aligned)
-            }
-           
-        }
-        else { // BLX Rn — ARM9 only
-        }
-        break;
+    }
     }
 }
 
@@ -1300,32 +1411,36 @@ void CPU::thumbPCRelativeLDR(uint16_t instruction) {
     uint8_t Rd = (instruction >> 8) & 0x7;
     uint32_t word8 = instruction & 0xFF;
 
-    // reg[15] is currently PC + 2. We need (PC + 4) & ~2.
-    // (PC + 2) + 2 = PC + 4.
-    uint32_t address = ((reg[15] + 2) & ~2) + (word8 * 4);
-    reg[Rd] = bus.read32(address);
+    uint32_t pipeline_pc = reg[15] + 2;
+    uint32_t address = (pipeline_pc & ~2u) + (word8 * 4);
+
+    uint32_t value = bus.read32(address & ~3);
+    uint8_t rotation = (address & 3) * 8;
+    reg[Rd] = rotate_right(value, rotation);
 }
 
-void  CPU::thumbLoadStoreRegister(uint16_t instruction) {
+void CPU::thumbLoadStoreRegister(uint16_t instruction) {
     uint8_t opcode = (instruction >> 10) & 0x3;
     uint8_t Rb = (instruction >> 3) & 0x7;
     uint8_t Rd = instruction & 0x7;
     uint8_t R0 = (instruction >> 6) & 0x7;
     switch (opcode) {
-    case 0b00: {//STR
+    case 0b00: { // STR
         bus.write32((reg[Rb] + reg[R0]), reg[Rd]);
         break;
     }
-    case 0b01: {//STRB
+    case 0b01: { // STRB
         bus.write8((reg[Rb] + reg[R0]), (reg[Rd] & 0xFF));
         break;
-
     }
-    case 0b10:{//LSR
-        reg[Rd] = bus.read32((reg[Rb] + reg[R0]));
+    case 0b10: { // LDR
+        uint32_t addr = reg[Rb] + reg[R0];
+        uint32_t value = bus.read32(addr & ~3);
+        uint8_t rotation = (addr & 3) * 8;
+        reg[Rd] = rotate_right(value, rotation);
         break;
     }
-    case 0b11: {//LDRB
+    case 0b11: { // LDRB
         reg[Rd] = bus.read8((reg[Rb] + reg[R0]));
         break;
     }
@@ -1337,11 +1452,21 @@ void CPU::thumbLoadStoreSign(uint16_t instruction) {
     uint8_t Rb = (instruction >> 3) & 0x7;
     uint8_t Rd = instruction & 0x7;
     uint8_t R0 = (instruction >> 6) & 0x7;
-    uint32_t address = reg[Rb] + reg[R0];  // raw, no masking here
+    uint32_t address = reg[Rb] + reg[R0];
 
     switch (opcode) {
     case 0b00: { // STRH
-        bus.write16(address & ~1u, reg[Rd] & 0xFFFF);
+        uint32_t storeAddr = address & ~1u;
+        if (storeAddr == 0x0400010C || storeAddr == 0x0400010E) {
+            dbg << "[STRH_TM3] (thumbLoadStoreSign) addr=0x" << std::hex << storeAddr
+                << " val=0x" << (reg[Rd] & 0xFFFF)
+                << " realPC=0x" << reg[15]
+                << " Rb=" << std::dec << (int)Rb << "=0x" << std::hex << reg[Rb]
+                << " R0=" << std::dec << (int)R0 << "=0x" << std::hex << reg[R0]
+                << "\n";
+            dbg.flush();
+        }
+        bus.write16(storeAddr, reg[Rd] & 0xFFFF);
         break;
     }
     case 0b01: { // LDRSB
@@ -1358,7 +1483,6 @@ void CPU::thumbLoadStoreSign(uint16_t instruction) {
     }
     case 0b11: { // LDRSH
         if (address & 1) {
-            // misaligned LDRSH acts as LDRSB on ARM7TDMI
             uint32_t value = bus.read8(address);
             if (value & 0x80) value |= 0xFFFFFF00;
             reg[Rd] = value;
@@ -1386,10 +1510,13 @@ void CPU::thumbLoadStoreImmediate(uint16_t instruction) {
         address = reg[Rb] + (offset * 4);
         bus.write32(address, reg[Rd]);
         break;
-    case 0b01: // LDR — word
+    case 0b01: { // LDR — word
         address = reg[Rb] + (offset * 4);
-        reg[Rd] = bus.read32(address);
+        uint32_t value = bus.read32(address & ~3);
+        uint8_t rotation = (address & 3) * 8;
+        reg[Rd] = rotate_right(value, rotation);
         break;
+    }
     case 0b10: // STRB — byte
         address = reg[Rb] + offset;
         bus.write8(address, reg[Rd] & 0xFF);
@@ -1401,7 +1528,6 @@ void CPU::thumbLoadStoreImmediate(uint16_t instruction) {
     }
 }
 
-
 void CPU::thumbLoadStoreHalfword(uint16_t instruction) {
     uint8_t opcode = (instruction >> 11) & 1;
     uint8_t nn = (instruction >> 6) & 0x1F;
@@ -1409,9 +1535,19 @@ void CPU::thumbLoadStoreHalfword(uint16_t instruction) {
     uint8_t Rd = instruction & 0x7;
     uint32_t address;
     switch (opcode) {
-    case 0: { //STRH
+    case 0: { // STRH
         address = reg[Rb] + (nn * 2);
-        bus.write16(address & ~1u, reg[Rd] & 0xFFFF);
+        uint32_t storeAddr = address & ~1u;
+        if (storeAddr == 0x0400010C || storeAddr == 0x0400010E) {
+            dbg << "[STRH_TM3] (thumbLoadStoreHalfword) addr=0x" << std::hex << storeAddr
+                << " val=0x" << (reg[Rd] & 0xFFFF)
+                << " realPC=0x" << reg[15]
+                << " Rb=" << std::dec << (int)Rb << "=0x" << std::hex << reg[Rb]
+                << " nn=" << std::dec << (int)nn
+                << "\n";
+            dbg.flush();
+        }
+        bus.write16(storeAddr, reg[Rd] & 0xFFFF);
         break;
     }
     case 1: { // LDRH
@@ -1424,44 +1560,39 @@ void CPU::thumbLoadStoreHalfword(uint16_t instruction) {
     }
 }
 
-
 void CPU::thumbSPRelative(uint16_t instruction) {
-    //std::cout << "wooooooooooooooooo";
-    uint8_t opcode = (instruction>>11) & 1;
-    uint8_t nn = instruction  & 0xFF;
-    uint8_t Rd=(instruction >> 8) & 0x7;
+    uint8_t opcode = (instruction >> 11) & 1;
+    uint8_t nn = instruction & 0xFF;
+    uint8_t Rd = (instruction >> 8) & 0x7;
     uint32_t SP = reg[13];
     uint32_t address = SP + (nn * 4);
     switch (opcode) {
-    case 0: {//STR
+    case 0: { // STR
         bus.write32(address, reg[Rd]);
         break;
     }
-    case 1: { //LDR
-        reg[Rd] = bus.read32(address);
+    case 1: { // LDR
+        uint32_t value = bus.read32(address & ~3);
+        uint8_t rotation = (address & 3) * 8;
+        reg[Rd] = rotate_right(value, rotation);
         break;
     }
     }
 }
 
-void CPU:: thumbLoadAddress(uint16_t instruction) {
+void CPU::thumbLoadAddress(uint16_t instruction) {
     uint8_t opcode = (instruction >> 11) & 1;
     uint8_t nn = instruction & 0xFF;
     uint8_t Rd = (instruction >> 8) & 0x7;
 
     switch (opcode) {
     case 0: { // ADD Rd, PC, #nn
-        // Architecture requires (PC + 4) & ~2
-       
-        uint32_t archPC = getReg(15) & ~3u;
-        reg[Rd] = (archPC) + (nn * 4);
-       /* std::cout << "ADD PC: archPC=0x" << std::hex << archPC
-            << " nn=" << (int)nn
-            << " result=0x" << reg[Rd] << "\n";*/
+        // Architecture requires: (PC + 4) & ~2
+        uint32_t pipeline_pc = reg[15] + 2;
+        reg[Rd] = (pipeline_pc & ~2u) + (nn * 4);
         break;
     }
-    case 1: { //ADD SP
-        //std::cout << "hellloooo\n";
+    case 1: { // ADD Rd, SP, #nn
         reg[Rd] = reg[13] + (nn * 4);
         break;
     }
@@ -1485,8 +1616,8 @@ void CPU::thumbAddSP(uint16_t instruction) {
 }
 
 void CPU::thumbPushPop(uint16_t instruction) {
-    bool L = (instruction >> 11) & 1; // 1=Pop, 0=Push
-    bool R = (instruction >> 8) & 1;  // 1=PC/LR bit
+    bool L = (instruction >> 11) & 1;
+    bool R = (instruction >> 8) & 1;
     uint8_t regList = instruction & 0xFF;
     uint32_t address = reg[13];
 
@@ -1494,17 +1625,15 @@ void CPU::thumbPushPop(uint16_t instruction) {
         uint8_t count = 0;
         for (int i = 0; i < 8; i++) if (regList & (1 << i)) count++;
         if (R) count++;
-
         address -= (count * 4);
-        reg[13] = address; // Update SP first
-
+        reg[13] = address;
         for (int i = 0; i < 8; i++) {
             if (regList & (1 << i)) {
                 bus.write32(address, reg[i]);
                 address += 4;
             }
         }
-        if (R) bus.write32(address, reg[14]); // Push LR
+        if (R) bus.write32(address, reg[14]);
     }
     else { // POP
         for (int i = 0; i < 8; i++) {
@@ -1514,32 +1643,34 @@ void CPU::thumbPushPop(uint16_t instruction) {
             }
         }
         if (R) {
-            // POP {PC} ignores LSB, remains in Thumb
-            reg[15] = bus.read32(address) & ~1u;
+            uint32_t target = bus.read32(address);
             address += 4;
+            reg[13] = address;
+            reg[15] = target & ~1u;
+            return;
         }
         reg[13] = address;
     }
 }
-
 void CPU::thumbMultipleLoadStore(uint16_t instruction) {
     uint8_t L = (instruction >> 11) & 1;
     uint8_t Rb = (instruction >> 8) & 0x7;
     uint8_t regList = instruction & 0xFF;
     uint32_t address = reg[Rb];
 
-    // Empty rlist: transfer PC, base += 0x40
     if (regList == 0) {
-        if (L) {
+        if (L) { // LDMIA Rb!, {}
             reg[15] = bus.read32(address) & ~1u;
         }
-        else {
-            bus.write32(address, getReg(15)+2); 
+        else {   // STMIA Rb!, {}
+            // Write PC + 6. Since reg[15] is currently PC + 2, we add 4.
+            uint32_t pipeline_pc = reg[15] + 4;
+            bus.write32(address, pipeline_pc);
         }
+        // Both write back a offset of 0x40 (equivalent to 16 registers)
         reg[Rb] += 0x40;
         return;
     }
-
     uint32_t count = 0;
     for (int i = 0; i <= 7; i++)
         if (regList & (1u << i)) count++;
@@ -1573,18 +1704,17 @@ void CPU::thumbMultipleLoadStore(uint16_t instruction) {
 
 void CPU::thumbConditionalBranch(uint16_t instruction) {
     uint8_t cond = (instruction >> 8) & 0xF;
-
     if (cond == 0xF) {
+        uint8_t swiNum = instruction & 0xFF;
+        dbg << "[SWI] num=0x" << std::hex << (int)swiNum
+            << " PC=0x" << reg[15]
+            << " R0=0x" << reg[0] << "\n";
+        dbg.flush();
         executeSWI((uint32_t)instruction);
         return;
     }
-
     if (checkCondition(cond)) {
-        // Sign extend 8-bit offset to 32-bit signed int
         int32_t offset = (int8_t)(instruction & 0xFF);
-
-        // Target = (PC + 4) + (offset * 2)
-        // reg[15] is PC + 2, so we add 2 more to get PC + 4.
         reg[15] = (reg[15] + 2) + (offset << 1);
     }
 }
@@ -1599,89 +1729,120 @@ void CPU::thumbUnconditionalBranch(uint16_t instruction) {
     uint32_t pc = reg[15] + 2; // pipelined PC
     reg[15] = pc + (offset << 1);
 }
-
 void CPU::thumbLongBranch(uint16_t instruction) {
-    uint8_t H = (instruction >> 11) & 1;   // 0 = first half, 1 = second half
-    int32_t imm11 = (int32_t)(int16_t)((instruction & 0x7FF) << 5) >> 5; // sign extend 11 bits
+    uint8_t H = (instruction >> 11) & 1;
+    int32_t imm11 = (int32_t)(int16_t)((instruction & 0x7FF) << 5) >> 5;
 
     if (H == 0) {
         // First half: LR = PC + (imm11 << 12)
-        // PC = address of this instruction + 4 = (reg[15] - 2) + 4 = reg[15] + 2
-        uint32_t pc = reg[15] + 2;
+        uint32_t pc = reg[15] + 2;  // Thumb pipeline: instr_addr + 4
         reg[14] = pc + (imm11 << 12);
     }
     else {
-        // Second half: target = LR + (imm11 << 1)
-        // Also update LR = address of next instruction (after BL) | 1
-        reg[14] = reg[15] | 1;               // return address with Thumb bit set
-        reg[15] = reg[14] + (imm11 << 1);    // target = LR + offset*2
+        // Second half: compute target from FIRST-HALF LR before overwriting it
+        uint32_t target = reg[14] + (imm11 << 1);  // use LR set by first half
+        reg[14] = reg[15] | 1;                      // LR = return addr | Thumb bit
+        reg[15] = target & ~1;                      // jump
     }
 }
 
-void CPU::executeThumb(uint16_t instruction) {
-    uint8_t top5 = instruction >> 11;  // bits 15-11
-    uint8_t top6 = instruction >> 10;  // bits 15-10
-    uint8_t top8 = instruction >> 8;   // bits 15-8
+int CPU::executeThumb(uint16_t instruction) {
+    uint8_t top5 = instruction >> 11;
+    uint8_t top6 = instruction >> 10;
+    uint8_t top8 = instruction >> 8;
 
-    if ((top5 & 0b11111) == 0b00011)  // format 2 FIRST
+    if ((top5 & 0b11111) == 0b00011) {
         thumbAddSubtract(instruction);
-    else if ((top5 & 0b11100) == 0b00000)  // format 1 AFTER
-        thumbMoveShifted(instruction);
-     else if ((top5 & 0b11100) == 0b00100)  // 001xx — format 3 move/compare/add/subtract immediate
-        thumbMoveImmediate(instruction);
-    else if (top6 == 0b010000)           // 010000 — format 4  thumbDataProcessing
-        thumbDataProcessing(instruction);
-    else if (top6 == 0b010001)           // 010001 — format 5 hi register/BX
-        thumbHiRegister(instruction);
-    else if ((top5 & 0b11111) == 0b01001)  // 01001 — format 6 PC-relative LDR
-        thumbPCRelativeLDR(instruction);
-    else if ((top5 & 0b11110) == 0b01010) {  // 0101x
-        if ((instruction >> 9) & 1)
-            thumbLoadStoreSign(instruction);   // format 8 — bit 9 = 1
-        else
-            thumbLoadStoreRegister(instruction); // format 7 — bit 9 = 0
+        return 1;
     }
-    else if ((top5 & 0b11100) == 0b01100)  // 011xx — format 9
+    else if ((top5 & 0b11100) == 0b00000) {
+        thumbMoveShifted(instruction);
+        return 1;
+    }
+    else if ((top5 & 0b11100) == 0b00100) {
+        thumbMoveImmediate(instruction);
+        return 1;
+    }
+    else if (top6 == 0b010000) {
+        thumbDataProcessing(instruction);
+        return 1;
+    }
+    else if (top6 == 0b010001) {
+        thumbHiRegister(instruction);
+        return 3;
+    }
+    else if ((top5 & 0b11111) == 0b01001) {
+        thumbPCRelativeLDR(instruction);
+        return 2;
+    }
+    else if ((top5 & 0b11110) == 0b01010) {
+        if ((instruction >> 9) & 1) {
+            thumbLoadStoreSign(instruction);
+            return 2;
+        }
+        else {
+            thumbLoadStoreRegister(instruction);
+            return 2;
+        }
+    }
+    else if ((top5 & 0b11100) == 0b01100) {
         thumbLoadStoreImmediate(instruction);
-    else if ((top5 & 0b11110) == 0b10000)  // 1000x — format 10 load/store halfword
+        return 2;
+    }
+    else if ((top5 & 0b11110) == 0b10000) {
         thumbLoadStoreHalfword(instruction);
-    else if ((top5 & 0b11110) == 0b10010)  // 1001x — format 11 SP-relative
+        return 2;
+    }
+    else if ((top5 & 0b11110) == 0b10010) {
         thumbSPRelative(instruction);
-    else if ((top5 & 0b11110) == 0b10100)  // 1010x — format 12 load address
+        return 2;
+    }
+    else if ((top5 & 0b11110) == 0b10100) {
         thumbLoadAddress(instruction);
-    else if (top8 == 0b10110000 )  // 10110000 — format 13 add offset to SP
+        return 1;
+    }
+    else if (top8 == 0b10110000) {
         thumbAddSP(instruction);
-    else if ((top8 & 0b11110110) == 0b10110100)  // 1011x — format 14 push/pop
+        return 1;
+    }
+    else if ((top8 & 0b11110110) == 0b10110100) {
         thumbPushPop(instruction);
-    else if ((top5 & 0b11110) == 0b11000)  // 1100x — format 15 multiple load/store
+        return 3;
+    }
+    else if ((top5 & 0b11110) == 0b11000) {
         thumbMultipleLoadStore(instruction);
-    else if ((top5 & 0b11110) == 0b11010)  // 1101x — format 16/17 conditional branch/SWI
+        return 4;
+    }
+    // --- FIXED SWI DECODING INTERCEPT ---
+    else if (top8 == 0b11011111) { // 0xDF - Software Interrupt (SWI / SVC)
+        executeSWI(instruction);
+        return 3;
+    }
+    // ------------------------------------
+    else if ((top5 & 0b11110) == 0b11010) {
         thumbConditionalBranch(instruction);
-    else if ((top5 & 0b11111) == 0b11100)  // 11100 — format 18 unconditional branch
+        return 3;
+    }
+    else if ((top5 & 0b11111) == 0b11100) {
         thumbUnconditionalBranch(instruction);
+        return 3;
+    }
     else if (top5 == 0b11110) {
-        // FIRST HALF — sets up LR
-        // Formula: LR = PC + 4 + (nn << 12)
-        // PC = address of first instruction = reg[15] - 2 (Step already incremented by 2)
-        // so: LR = (reg[15] - 2) + 4 + (nn << 12) = reg[15] + 2 + (nn << 12)
-
         int32_t nn = instruction & 0x7FF;
-        if (nn & (1 << 10)) nn |= 0xFFFFF800; // sign extend from 11 bits
-
+        if (nn & (1 << 10)) nn |= 0xFFFFF800;
         reg[14] = reg[15] + 2 + (nn << 12);
+        return 1;
     }
     else if (top5 == 0b11111) {
-        // SECOND HALF
         uint32_t nn = instruction & 0x7FF;
-        uint32_t nextInstr = reg[15] | 1; // reg[15] is already PC+2
-
-        // PC = LR + (Offset << 1)
+        uint32_t nextInstr = reg[15] | 1;
         reg[15] = reg[14] + (nn << 1);
-        // LR = Next Instruction Address | 1
         reg[14] = nextInstr;
+        return 3;
     }
     else if (top5 == 0b11101) {
-        // BLX — ARM9 only, not on GBA
-        
+        return 1;
     }
+
+    return 1;
 }

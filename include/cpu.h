@@ -12,7 +12,7 @@ const uint8_t MODE_SYSTEM = 0b11111;
 
 struct CPU {
     uint32_t reg[16] = { 0 };
-    uint32_t cpsr = 0;
+    uint32_t cpsr = 0xD3;
     Bus& bus;
     bool halted = false;
 
@@ -31,19 +31,22 @@ struct CPU {
 
     CPU(Bus& b) : bus(b) {}
     void skipBIOS();
-    void Step();
-    void Execute(uint32_t instruction);
-    void executeThumb(uint16_t instruction);
+    int Step();
+    int Execute(uint32_t instruction);
+    int executeThumb(uint16_t instruction);
     void triggerFIQ();
     void triggerIRQ();
-    void switchMode(uint8_t newMode, bool returning);
+    void switchMode(uint8_t newMode);
+    void restoreCPSRFromSPSR();
+    void setCPSR(uint32_t val);
+    uint32_t getReg(uint8_t index);
+
 
 private:
     bool  const   checkCondition(uint32_t cond);
     void     setFlags(uint32_t result, uint64_t full, uint32_t Rn, uint32_t op2, bool isSub);
     uint32_t rotate_right(uint32_t value, uint8_t amount);
     uint32_t apply_shift(uint32_t value, uint8_t shift);
-    uint32_t getReg(uint8_t index);
     void executeBranch(uint32_t instruction);
     void executeBx(uint32_t instruction);
     void executeDataProcessing(uint32_t instruction);
