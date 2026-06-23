@@ -1,15 +1,15 @@
 ﻿#include "bus.h"
 #include "cpu.h"
 #include "PPU.h"
+#include "apu.h"
 #include "gba_registers.h"
 #include <algorithm> 
 #include <cstring>
 extern std::ofstream dbg;
-static bool displayModeSet = false;
-static int  c0cClearCount = 0;   // count calls from 0xC0C
 Bus::Bus() :
     cpuptr(nullptr),       // Start with no CPU linked
     ppuptr(nullptr),
+    apuptr(nullptr),
     bios_latch(0),      // Initial BIOS latch is 0
     postflg(0),
     vcount(0),
@@ -38,22 +38,213 @@ inline uint32_t mirror(uint32_t addr, uint32_t base, uint32_t size) {
 
 void Bus::setCPU(CPU* _cpu) { cpuptr = _cpu; }
 
+void Bus::onVBlank() {
+   //dbg << "saaar VBLANNNNKK SAAAR \n";dbg.flush();
+    for (int ch = 0; ch < 4; ch++) {
+        if (!(dma[ch].cnt & (1u << 31))) continue;
+        if (((dma[ch].cnt >> 28) & 0x3) != 1) continue;
+
+        uint8_t dest_adj = (dma[ch].cnt >> 21) & 0x3;
+        if (dest_adj == 3) dma[ch].idad = dma[ch].dad;
+        executeDMA(ch);
+    }
+}
+
+void Bus::onHBlank() {
+    //dbg << "saaar HBLANNNNKK here \n";dbg.flush();
+
+    for (int ch = 0; ch < 4; ch++) {
+        if (!(dma[ch].cnt & (1u << 31))) continue;
+        if (((dma[ch].cnt >> 28) & 0x3) != 2) continue;
+
+        uint8_t dest_adj = (dma[ch].cnt >> 21) & 0x3;
+        if (dest_adj == 3) dma[ch].idad = dma[ch].dad;
+        executeDMA(ch);
+    }
+}
+
+void Bus::detectEEPROMSize() {
+
+    uint32_t romSize = 0;
+    for (int i = (int)rom.size() - 1; i >= 0; i--) {
+        if (rom[i] != 0) { romSize = (uint32_t)i + 1; break; }
+    }
+    eepromLargeAddress = (romSize >= 0x1000000);
+    dbg << "[EEPROM_SIZE] romSize=0x" << std::hex << romSize
+        << " eepromLargeAddress=" << eepromLargeAddress << "\n";
+    dbg.flush();
+}
+
+void Bus::writeEEPROM(uint8_t bit) {
+    switch (eepromState) {
+    case EEPROM_IDLE:
+        eepromBuffer = bit;
+        eepromBitsLeft = 1;
+        eepromState = EEPROM_REQUEST;
+        eepromWriteDone = false;
+        break;
+
+    case EEPROM_REQUEST:
+        eepromBuffer = (eepromBuffer << 1) | bit;
+        eepromBitsLeft++;
+        if (eepromBitsLeft == 2) {
+            eepromRequestType = eepromBuffer & 0x3;
+            eepromAddress = 0;
+            eepromBitsLeft = eepromLargeAddress ? 14 : 6;
+            eepromState = EEPROM_ADDRESS;
+        }
+        break;
+
+    case EEPROM_ADDRESS:
+        eepromAddress = (eepromAddress << 1) | bit;
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0) {
+            if (eepromRequestType == 0x3) {
+                eepromState = EEPROM_READ_DUMMY;
+                eepromBitsLeft = 5;  // 4 dummy + 1 to absorb stop bit from write DMA
+                uint32_t offset = eepromAddress * 8;
+                for (int i = 0; i < 8; i++)
+                    eepromReadBuffer[i] = (offset + i < (int)saveData.size())
+                    ? saveData[offset + i] : 0xFF;
+                eepromReadBit = 0;
+                dbg << "[EEPROM_READ_SETUP] address=0x" << std::hex << eepromAddress
+                    << " saveData[0]=0x" << (int)saveData[offset]
+                    << " saveData[1]=0x" << (int)saveData[offset + 1]
+                    << " saveData[2]=0x" << (int)saveData[offset + 2]
+                    << " saveData[3]=0x" << (int)saveData[offset + 3] << "\n";
+                dbg << "[EEPROM_TXN] READ requestType=0x" << std::hex << (int)eepromRequestType
+                    << " address=0x" << eepromAddress
+                    << " byteOffset=0x" << offset << "\n";
+                dbg.flush();
+            }
+            else {
+                eepromState = EEPROM_WRITE_DATA;
+                eepromBitsLeft = 64;
+                eepromBuffer = 0;
+                dbg << "[EEPROM_TXN] WRITE_START requestType=0x" << std::hex << (int)eepromRequestType
+                    << " address=0x" << eepromAddress << "\n";
+                dbg.flush();
+            }
+        }
+        break;
+
+    case EEPROM_WRITE_DATA:
+        eepromBuffer = (eepromBuffer << 1) | bit;
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0) {
+            uint32_t offset = eepromAddress * 8;
+            for (int i = 0; i < 8; i++) {
+                uint8_t byte = (eepromBuffer >> (56 - i * 8)) & 0xFF;
+                if (offset + i < saveData.size())
+                    saveData[offset + i] = byte;
+            }
+            dbg << "[EEPROM_TXN] WRITE_COMPLETE address=0x" << std::hex << eepromAddress
+                << " data=0x" << eepromBuffer << "\n";
+            dbg << "[EEPROM_VERIFY] saveData[0]=0x" << (int)saveData[0]
+                << " saveData[1]=0x" << (int)saveData[1]
+                << " offset=" << std::dec << offset
+                << " saveData.size()=" << saveData.size() << "\n";
+            dbg.flush();
+            eepromWriteDone = true;
+            eepromState = EEPROM_WRITE_STOP;
+            eepromBitsLeft = 1;
+        }
+        break;
+
+    case EEPROM_WRITE_STOP:
+        eepromState = EEPROM_IDLE;
+        break;
+
+    case EEPROM_READ_DUMMY:
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0) {
+            eepromState = EEPROM_READ_DATA;
+            eepromBitsLeft = 64;
+        }
+        break;
+
+    case EEPROM_READ_DATA:
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0)
+            eepromState = EEPROM_IDLE;
+        break;
+
+    default:
+        break;
+    }
+}
+
+
+
+
+uint8_t Bus::readEEPROM() {
+    dbg << "[EEPROM_READ] state=" << (int)eepromState
+        << " PC=0x" << std::hex << cpuptr->reg[15] << "\n";
+    dbg.flush();
+
+    switch (eepromState) {
+    case EEPROM_READ_DUMMY:
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0) {
+            eepromState = EEPROM_READ_DATA;
+            eepromBitsLeft = 64;
+        }
+        return 0;
+
+    case EEPROM_READ_DATA: {
+        int bitIndex = 63 - (eepromBitsLeft - 1);
+        int byteIndex = bitIndex / 8;
+        int bitPos = 7 - (bitIndex % 8);
+        uint8_t bit = (eepromReadBuffer[byteIndex] >> bitPos) & 1;
+        eepromBitsLeft--;
+        if (eepromBitsLeft == 0) {
+            eepromState = EEPROM_IDLE;
+            uint64_t dataOut = 0;
+            for (int i = 0; i < 8; i++) dataOut = (dataOut << 8) | eepromReadBuffer[i];
+            dbg << "[EEPROM_TXN] READ_COMPLETE address=0x" << std::hex << eepromAddress
+                << " data=0x" << dataOut << "\n";
+            dbg.flush();
+        }
+        return bit;
+    }
+
+    default:
+        return 1;  // EEPROM ready / not in a read transaction
+    }
+}
 // -------------------------------------------------------------------
 // Read a byte from the GBA address space
 // -------------------------------------------------------------------
 uint8_t Bus::read8(uint32_t address) {
-    uint8_t result = 0;
-    if (cpuptr->reg[15] >= 0x3003580 && cpuptr->reg[15] <= 0x3003700) {
-        dbg << "[HANDLER_EXEC] PC=0x" << std::hex << cpuptr->reg[15] << "\n";
+    if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] read addr=0x" << std::hex << address
+            << " state=" << (int)eepromState
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            return readEEPROM();
+        return 0xFF;
     }
+
+    uint8_t result = 0;
     if (address < 0x4000) {
-        if (cpuptr->reg[15] >= 0x4000)
+        if (cpuptr->reg[15] >= 0x4000) {
+            dbg << "[BIOS_LATCH_HIT] addr=0x" << std::hex << address
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
             result = (bios_latch >> ((address & 3) * 8)) & 0xFF;
+        }
         else
             result = bios[address];
     }
     else if (address >= 0x02000000 && address < 0x03000000) {
         result = ewram[mirror(address, 0x02000000, 0x40000)];
+        if (address == 0x02000002 || address == 0x02000003) {
+            dbg << "[READ_0002] addr=0x" << std::hex << address
+                << " val=0x" << (int)result
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
+        }
     }
     else if (address >= 0x03000000 && address < 0x04000000) {
         result = iwram[mirror(address, 0x03000000, 0x8000)];
@@ -68,7 +259,9 @@ uint8_t Bus::read8(uint32_t address) {
         result = pram[mirror(address, 0x05000000, 0x400)];
     }
     else if (address >= 0x06000000 && address < 0x07000000) {
-        result = vram[(address - 0x06000000) % 0x18000];
+        uint32_t offset = (address - 0x06000000) % 0x20000;
+        if (offset >= 0x18000) offset -= 0x8000;
+        result = vram[offset];
     }
     else if (address >= 0x07000000 && address < 0x08000000) {
         result = oam[mirror(address, 0x07000000, 0x400)];
@@ -76,17 +269,22 @@ uint8_t Bus::read8(uint32_t address) {
     else if (address >= 0x08000000) {
         result = rom[address & 0x1FFFFFF];
     }
-
-    if (cpuptr->reg[15] >= 0x80008BE && cpuptr->reg[15] <= 0x80008D0) {
-        dbg << "[MAINLOOP_READ] addr=0x" << std::hex << address
-            << " val=0x" << (int)result << "\n";
-    }
-
     return result;
-}// -------------------------------------------------------------------
+}
+
+// -------------------------------------------------------------------
 // Read a half‑word (16 bits) from the GBA address space
 // -------------------------------------------------------------------
 uint16_t Bus::read16(uint32_t address) {
+    if ((address & ~1) >= 0x0D000000 && (address & ~1) <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] read16 addr=0x" << std::hex << address
+            << " state=" << (int)eepromState
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            return readEEPROM();
+        return 0xFF;
+    }
     uint32_t addr = address & ~1;
     return (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
 }
@@ -95,40 +293,72 @@ uint16_t Bus::read16(uint32_t address) {
 // Read a word (32 bits) from the GBA address space
 // -------------------------------------------------------------------
 uint32_t Bus::read32(uint32_t address) {
-    if (address >= 0x10000000 && address <= 0x1FFFFFFF) {
-        dbg << "BAD READ32 at addr=0x" << std::hex << address << "\n";
+    if ((address & ~3) >= 0x0D000000 && (address & ~3) <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] read32 addr=0x" << std::hex << address
+            << " state=" << (int)eepromState
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            return readEEPROM();
+        return 0xFF;
+    }
+
+    static uint32_t lastLoggedAddr = 0;
+    static int loopCount = 0;
+    if (cpuptr->reg[15] >= 0x390 && cpuptr->reg[15] <= 0x3A0) {
+        if (address != lastLoggedAddr) {
+            dbg << "[LOOP_READ] addr=0x" << std::hex << address
+                << " val=0x" << read8(address)
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
+            lastLoggedAddr = address;
+        }
     }
     if (address < 0x4000 && cpuptr->reg[15] >= 0x4000) {
         return bios_latch;
     }
     uint32_t alignedAddr = address & ~3;
-    uint32_t val = (uint32_t)read8(alignedAddr)
+    return (uint32_t)read8(alignedAddr)
         | ((uint32_t)read8(alignedAddr + 1) << 8)
         | ((uint32_t)read8(alignedAddr + 2) << 16)
         | ((uint32_t)read8(alignedAddr + 3) << 24);
-
-    uint8_t shift = (address & 3) * 8;
-    if (shift != 0) {
-        val = (val >> shift) | (val << (32 - shift));
-    }
-    return val;
 }
 
 void Bus::executeDMA(int channel) {
+    dbg << "[DMA" << channel << "] src=0x" << std::hex << dma[channel].isad
+        << " dst=0x" << dma[channel].idad
+        << " cnt=0x" << dma[channel].cnt << "\n";
+    if (channel == 3) {
+        dbg << "[DMA3] src=0x" << std::hex << dma[channel].isad
+            << " dst=0x" << dma[channel].idad
+            << " cnt=0x" << dma[channel].cnt << "\n";
+        dbg.flush();
+    }
+    bool isFIFO = (((dma[channel].cnt >> 28) & 0x3) == 3) &&
+        (dma[channel].dad == 0x040000A0 ||
+            dma[channel].dad == 0x040000A4);
+
     uint32_t src = dma[channel].isad;
     uint32_t dest = dma[channel].idad;
-    uint32_t count = dma[channel].cnt & 0x0000FFFF;
+    uint32_t count;
 
-    dbg << "[DMA] ch=" << channel
-        << " src=0x" << std::hex << src
-        << " dst=0x" << dest
-        << " count=" << std::dec << count << "\n";
-    dbg.flush();
+    if (isFIFO) {
+        count = 4;
+    }
+    else {
+        count = dma[channel].cnt & 0x0000FFFF;
+        if (count == 0)
+            count = (channel == 3) ? 0x10000 : 0x4000;
+    }
 
-    if (count == 0)
-        count = (channel == 3) ? 0x10000 : 0x4000;
+    // Auto-detect EEPROM address width from write DMA count
+    if (saveType == SAVE_EEPROM &&
+        dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
+        if (count == 73) eepromLargeAddress = false;
+        else if (count == 81) eepromLargeAddress = true;
+    }
 
-    uint8_t dest_adj = (dma[channel].cnt >> 21) & 0x3;
+    uint8_t dest_adj = isFIFO ? 2 : (dma[channel].cnt >> 21) & 0x3;
     uint8_t src_adj = (dma[channel].cnt >> 23) & 0x3;
     uint8_t repeat = (dma[channel].cnt >> 25) & 0x1;
     uint8_t word = (dma[channel].cnt >> 26) & 0x1;
@@ -155,10 +385,19 @@ void Bus::executeDMA(int channel) {
     dma[channel].isad = src;
     dma[channel].idad = (dest_adj == 3) ? dma[channel].dad : dest;
 
+    if (saveType == SAVE_EEPROM &&
+        dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
+        if (eepromState == EEPROM_WRITE_DATA ||
+            eepromState == EEPROM_WRITE_STOP ||
+            eepromState == EEPROM_REQUEST ||
+            eepromState == EEPROM_ADDRESS) {
+            eepromState = EEPROM_IDLE;
+        }
+    }
+
     if (!repeat)
         dma[channel].cnt &= ~(1u << 31);
 
-    // FIXED: Properly write to the 16-bit IF register across two 8-bit bytes
     if (irq) {
         uint16_t IF = io[0x202] | (io[0x203] << 8);
         IF |= (1 << (8 + channel));
@@ -167,22 +406,15 @@ void Bus::executeDMA(int channel) {
     }
 }
 
-
 void Bus::writeDMA(uint32_t address, uint8_t value) {
-    if (address >= DMA0_BASE && address <= DMA0_BASE + 11) {
-        dbg << "[DMA0_REG] offset=" << std::dec << (address - DMA0_BASE)
-            << " val=0x" << std::hex << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-
     int ch = (address - DMA0_BASE) / 12;
     int offset = (address - DMA0_BASE) % 12;
-    if (offset == 7) {  // last byte of DAD
-        dbg << "[DMA_DAD] ch=" << ch
-            << " dad=0x" << std::hex << dma[ch].dad << "\n";
-        dbg.flush();
-    }
+
+    dbg << "[DMA_WRITE] ch=" << ch << " offset=" << offset
+        << " val=0x" << std::hex << (int)value
+        << " PC=0x" << cpuptr->reg[15] << "\n";
+    dbg.flush();
+
     if (offset < 4) { ((uint8_t*)&dma[ch].sad)[offset] = value; }
     else if (offset < 8) { ((uint8_t*)&dma[ch].dad)[offset - 4] = value; }
     else { ((uint8_t*)&dma[ch].cnt)[offset - 8] = value; }
@@ -201,91 +433,97 @@ void Bus::writeDMA(uint32_t address, uint8_t value) {
 // Write a byte to the GBA address space
 // -------------------------------------------------------------------
 void Bus::write8(uint32_t address, uint8_t value) {
-    if (address == 0x3003f3c && value == 0 && cpuptr->reg[15] < 0x4000) {
-        iwram[mirror(0x3003f3c, 0x03000000, 0x8000)] = 0x40;
+    if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] write8 addr=0x" << std::hex << address
+            << " val=0x" << (int)value
+            << " state=" << (int)eepromState
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            writeEEPROM(value & 1);
         return;
     }
-    if (address == 0x05000000 || address == 0x05000001) {
-        dbg << "[PRAM0_WRITE] addr=0x" << std::hex << address
+    if (address == 0x02000219 || address == 0x0200021A) {
+        dbg << "[CORRUPT_WRITE] addr=0x" << std::hex << address
             << " val=0x" << (int)value
+            << " PC=0x" << cpuptr->reg[15]
+            << " R1=0x" << cpuptr->reg[1]
+            << " R2=0x" << cpuptr->reg[2] << "\n";
+        dbg.flush();
+    }
+    if (address == 0x0400010E) {
+        dbg << "[TM3CNT_H_WRITE] val=0x" << std::hex << (int)value
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
     }
-    if (address >= 0x05000200 && address <= 0x05000203) {
-        dbg << "[OBJ_PAL_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    if (address >= 0x3003f3c && address <= 0x3003f3f) {
-        dbg << "[FRAME_PTR_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    if (address == 0x3003f3c) {
-        dbg << "[F3C_WRITE] val=0x" << std::hex << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    // ==== IRQ handler copy logging ====
-    if (address >= 0x3003580 && address <= 0x30035FF) {
-        dbg << "[IWRAM_IRQ_COPY] addr=0x" << std::hex << address
-            << " value=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-
-    // ==== First 4 bytes of IWRAM (optional) ====
-    if (address >= 0x3000000 && address <= 0x3000003) {
-        dbg << "[DISP_VAR_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-
-    // ==== Flag monitoring (0x300310C-0x300310D) ====
-    if (address >= 0x0300310c && address <= 0x0300310d) {
-        dbg << "[FLAG_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-
-    // ==== IRQ vector writes (0x3007FF8-0x3007FFF) ====
-    if (address >= 0x3007FF8 && address <= 0x3007FFF) {
-        dbg << "[IRQ_VECTOR_WRITE] addr=0x" << std::hex << address
-            << " value=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-
-    // ==== Actual memory writes ====
-    // EWRAM (256KB mirrored)
     if (address >= 0x02000000 && address < 0x03000000) {
         ewram[mirror(address, 0x02000000, 0x40000)] = value;
         return;
     }
-    // IWRAM (32KB mirrored)
     else if (address >= 0x03000000 && address < 0x04000000) {
-        iwram[mirror(address, 0x03000000, 0x8000)] = value;
+        uint32_t offset = mirror(address, 0x03000000, 0x8000);
+        iwram[offset] = value;
+        if (offset >= 0x7FF8 && offset <= 0x7FFF) {
+           /* dbg << "[IWRAM_TAIL] offset=0x" << std::hex << offset
+                << " value=0x" << (int)value
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();*/
+        }
         return;
     }
 
-    // I/O registers
     if (address >= 0x04000000 && address < 0x04000400) {
         uint32_t ioAddr = address - 0x04000000;
 
-        // DMA registers
         if (address >= DMA0_BASE && address <= 0x040000DF) {
             writeDMA(address, value);
             return;
         }
 
+        // ── APU registers 0x60–0xA8 ──────────────────────────────────
+        if (ioAddr >= 0x60 && ioAddr <= 0xA8) {
+            io[ioAddr] = value;           // keep io[] in sync for reads
+            if (apuptr) apuptr->writeRegister(ioAddr, value);
+            return;
+        }
+        // ─────────────────────────────────────────────────────────────
+
+        // ── Timer registers 0x100-0x10F ──────────────────────────────
+        if (ioAddr >= 0x100 && ioAddr <= 0x10F) {
+            int timerIdx = (ioAddr - 0x100) / 4;
+            int byteOff = (ioAddr - 0x100) % 4;
+
+            if (byteOff == 0) {
+                // Low byte of reload latch — don't touch running counter
+                ((uint8_t*)&timer_reload[timerIdx])[0] = value;
+            }
+            else if (byteOff == 1) {
+                // High byte of reload latch
+                ((uint8_t*)&timer_reload[timerIdx])[1] = value;
+            }
+            else if (byteOff == 2) {
+                // CNT_H low byte — bit 7 = start/stop
+                bool was_on = (io[ioAddr] & 0x80) != 0;
+                bool now_on = (value & 0x80) != 0;
+                io[ioAddr] = value;
+                if (!was_on && now_on) {
+                    // Reload counter from latch on 0→1 start edge
+                    io[0x100 + timerIdx * 4] = timer_reload[timerIdx] & 0xFF;
+                    io[0x101 + timerIdx * 4] = (timer_reload[timerIdx] >> 8) & 0xFF;
+                }
+            }
+            else {
+                // byteOff == 3: CNT_H high byte (unused on GBA)
+                io[ioAddr] = value;
+            }
+            return;
+        }
+        // ─────────────────────────────────────────────────────────────
+
         switch (ioAddr) {
         case 0x04:
             io[0x04] = (io[0x04] & 0x07) | (value & 0x38);
-            dbg << "[DISPSTAT WRITE] value=0x" << std::hex << (int)value
+            dbg << "[DISPSTAT_WRITE] val=0x" << std::hex << (int)value
                 << " result=0x" << (int)io[0x04]
                 << " PC=0x" << cpuptr->reg[15] << "\n";
             dbg.flush();
@@ -307,55 +545,87 @@ void Bus::write8(uint32_t address, uint8_t value) {
         case 0x06:
         case 0x07:
             break;
+        case 0x200:
+        case 0x201:
+            dbg << "[IE_WRITE] addr=0x" << std::hex << ioAddr
+                << " val=0x" << (int)value
+                << " IE_after=0x" << (io[0x200] | (io[0x201] << 8))
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
+            io[ioAddr] = value;
+            break;
+        case 0x208:
+        case 0x209:
+            dbg << "[IME_WRITE 208/209] addr=0x" << std::hex << ioAddr
+                << " val=0x" << (int)value
+                << " IME_after=0x" << (io[0x208] | (io[0x209] << 8))
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
+            io[ioAddr] = value;
+            break;
         default:
             io[ioAddr] = value;
-            if (ioAddr == 0x00 || ioAddr == 0x01) {
-                uint16_t dispcnt = io[0x00] | (io[0x01] << 8);
-                // Read what's actually stored in the display-mode variable right now
-                uint32_t c0Addr = mirror(0x030000C0, 0x03000000, 0x8000);
-                uint16_t c0val = iwram[c0Addr] | (iwram[c0Addr + 1] << 8);
-                dbg << "[DISPCNT WRITE] addr=0x" << std::hex << address
-                    << " value=0x" << (int)value
-                    << " full=0x" << dispcnt
-                    << " C0_VAL=0x" << c0val
-                    << " PC=0x" << cpuptr->reg[15] << "\n";
-                dbg.flush();
-            }
             break;
         }
         return;
     }
 
-    // Palette RAM (1KB mirror)
     if (address >= 0x05000000 && address < 0x06000000) {
-        pram[mirror(address, 0x05000000, 0x400)] = value;
+        uint32_t offset = mirror(address, 0x05000000, 0x400);
+        pram[offset & ~1] = value;
+        pram[(offset & ~1) + 1] = value;
         return;
     }
 
-    // VRAM (96KB mirror)
     if (address >= 0x06000000 && address < 0x07000000) {
-        uint32_t vramAddr = (address - 0x06000000) % 0x18000;
-        vram[vramAddr] = value;
+        uint32_t offset = (address - 0x06000000) % 0x20000;
+        if (offset >= 0x18000) offset -= 0x8000;
+        vram[offset & ~1] = value;
+        vram[(offset & ~1) + 1] = value;
         return;
     }
 
-    // OAM – byte writes ignored on hardware
     if (address >= 0x07000000 && address < 0x08000000) {
         return;
     }
+
+    if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
+        if (saveType == SAVE_EEPROM)
+            writeEEPROM(value & 1);
+        return;
+    }
 }
-
 void Bus::write16(uint32_t address, uint16_t value) {
-    uint32_t addr = address & ~1;
-
-    // IWRAM IRQ copy logging (if you still want it)
-    if (address >= 0x3003580 && address <= 0x30035FF) {
-        dbg << "[IWRAM_IRQ_COPY16] addr=0x" << std::hex << address
-            << " value=0x" << value
+    if ((address & ~1) == 0x03004ca4) {
+        dbg << "[WRITE_3004CA4] write16 val=0x" << std::hex << value
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
     }
 
+    if (address == 0x0400010E || address + 1 == 0x0400010E) {
+        dbg << "[TM3CNT_H_WRITE16] addr=0x" << std::hex << address
+            << " val=0x" << value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+    if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] write16 addr=0x" << std::hex << address
+            << " val=0x" << value
+            << " state=" << (int)eepromState
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            writeEEPROM(value & 1);
+        return;
+    }
+    uint32_t addr = address & ~1;
+
+    if (addr >= 0x05000000 && addr < 0x06000000) {
+        uint32_t offset = mirror(addr, 0x05000000, 0x400);
+        pram[offset] = value & 0xFF;
+        pram[offset + 1] = (value >> 8) & 0xFF;
+        return;
+    }
     // OAM
     if (addr >= 0x07000000 && addr < 0x08000000) {
         uint32_t oamAddr = mirror(addr, 0x07000000, 0x400);
@@ -364,22 +634,73 @@ void Bus::write16(uint32_t address, uint16_t value) {
         return;
     }
 
+    // VRAM: 16-bit writes always go through, bypass byte-write rules
+    if (addr >= 0x06000000 && addr < 0x07000000) {
+        uint32_t offset = (addr - 0x06000000) % 0x20000;
+        if (offset >= 0x18000) offset -= 0x8000;
+        vram[offset] = value & 0xFF;
+        vram[offset + 1] = (value >> 8) & 0xFF;
+        return;
+    }
+
     // Default: split into two write8 calls
     write8(addr, value & 0xFF);
     write8(addr + 1, (value >> 8) & 0xFF);
 }
 
-
 void Bus::write32(uint32_t address, uint32_t value) {
+
     uint32_t addr = address & ~3;
-
-
-    // IWRAM IRQ copy logging (if you still want it)
-    if (address >= 0x3003580 && address <= 0x30035FF) {
-        dbg << "[IWRAM_IRQ_COPY32] addr=0x" << std::hex << address
-            << " value=0x" << value
+    if ((address & ~3) <= 0x03004ca4 && (address & ~3) + 3 >= 0x03004ca4) {
+    dbg << "[WRITE_3004CA4] write32 val=0x" << std::hex << value
+        << " PC=0x" << cpuptr->reg[15] << "\n";
+    dbg.flush();
+}
+    if (addr >= 0x0D000000 && addr <= 0x0DFFFFFF) {
+        dbg << "[EEPROM_ACCESS] write32 addr=0x" << std::hex << addr
+            << " val=0x" << value
+            << " state=" << (int)eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
+        if (saveType == SAVE_EEPROM)
+            writeEEPROM(value & 1);
+        return;
+    }
+
+    if (addr <= 0x0400010E && addr + 3 >= 0x0400010E) {
+        dbg << "[TM3CNT_H_WRITE32] addr=0x" << std::hex << addr
+            << " val=0x" << value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+
+    // FIFO_A = 0x040000A0, FIFO_B = 0x040000A4
+    if (addr == 0x040000A0 || addr == 0x040000A4) {
+        io[addr - 0x04000000] = value & 0xFF;
+        io[addr - 0x04000000 + 1] = (value >> 8) & 0xFF;
+        io[addr - 0x04000000 + 2] = (value >> 16) & 0xFF;
+        io[addr - 0x04000000 + 3] = (value >> 24) & 0xFF;
+        if (apuptr) apuptr->writeRegister(addr - 0x04000000, value);
+        return;
+    }
+
+    if (addr >= 0x05000000 && addr < 0x06000000) {
+        uint32_t offset = mirror(addr, 0x05000000, 0x400);
+        pram[offset] = value & 0xFF;
+        pram[offset + 1] = (value >> 8) & 0xFF;
+        pram[offset + 2] = (value >> 16) & 0xFF;
+        pram[offset + 3] = (value >> 24) & 0xFF;
+        return;
+    }
+
+    if (addr >= 0x06000000 && addr < 0x07000000) {
+        uint32_t offset = (addr - 0x06000000) % 0x20000;
+        if (offset >= 0x18000) offset -= 0x8000;
+        vram[offset] = value & 0xFF;
+        vram[offset + 1] = (value >> 8) & 0xFF;
+        vram[offset + 2] = (value >> 16) & 0xFF;
+        vram[offset + 3] = (value >> 24) & 0xFF;
+        return;
     }
 
     // OAM
@@ -398,12 +719,32 @@ void Bus::write32(uint32_t address, uint32_t value) {
     write8(addr + 2, (value >> 16) & 0xFF);
     write8(addr + 3, (value >> 24) & 0xFF);
 }
+
+void Bus::checkIRQ() {
+    uint16_t IME = io[0x208] | (io[0x209] << 8);
+    uint16_t IE = io[0x200] | (io[0x201] << 8);
+    uint16_t IF = io[0x202] | (io[0x203] << 8);
+    if (IE & IF) {
+        if (cpuptr->halted) {
+            dbg << "[UNHALT] IE=0x" << std::hex << IE << " IF=0x" << IF << "\n";
+            dbg.flush();
+        }
+        cpuptr->halted = false;
+    }
+    if ((cpuptr->cpsr & 0x1F) == 0x12) return;
+
+    if ((IME & 1) && (IE & IF) && !(cpuptr->cpsr & (1 << 7))) {
+        cpuptr->triggerIRQ();
+    }
+}
+
 // -------------------------------------------------------------------
 // Advance the LCD scanline counter (call after every CPU step)
 // -------------------------------------------------------------------
 void Bus::tick() {
     step_counter++;
 
+    // ── Timers ────────────────────────────────────────────────────────
     static uint32_t timer_ticks[4] = { 0, 0, 0, 0 };
     const uint16_t prescaler_shifts[4] = { 0, 6, 8, 10 };
     bool overflowed[4] = { false, false, false, false };
@@ -433,8 +774,7 @@ void Bus::tick() {
 
             if (current_val == 0) {
                 overflowed[i] = true;
-                uint16_t reload_val = io[0x100 + i * 4] | (io[0x101 + i * 4] << 8);
-                current_val = reload_val;
+                current_val = timer_reload[i];
 
                 if (cnt_h & (1 << 6)) {
                     uint16_t IF = io[0x202] | (io[0x203] << 8);
@@ -442,6 +782,9 @@ void Bus::tick() {
                     io[0x202] = IF & 0xFF;
                     io[0x203] = (IF >> 8) & 0xFF;
                 }
+
+                // ── only on actual overflow ──
+                if (apuptr) apuptr->onTimerOverflow(i);
             }
 
             io[0x100 + i * 4] = current_val & 0xFF;
@@ -449,11 +792,16 @@ void Bus::tick() {
         }
     }
 
+    // ── APU ──────────────────────────────────────────────────────────
+    if (apuptr) apuptr->tick(1);
+
+
+    // ── LCD timing ───────────────────────────────────────────────────
     if (step_counter == 960) {
         if (vcount < 160)
             ppuptr->renderScanLine(vcount);
 
-        io[0x04] |= (1 << 1);
+        io[0x04] |= (1 << 1);  // HBlank flag
 
         if (io[0x04] & (1 << 4)) {
             uint16_t IF = io[0x202] | (io[0x203] << 8);
@@ -463,11 +811,7 @@ void Bus::tick() {
         }
 
         if (vcount < 160) {
-            for (int i = 0; i < 4; i++) {
-                if ((dma[i].cnt & (1u << 31)) &&
-                    (((dma[i].cnt >> 28) & 0x3) == 2))
-                    executeDMA(i);
-            }
+            onHBlank();
             win0h_scanline[vcount] = io[0x40] | (io[0x41] << 8);
         }
     }
@@ -475,7 +819,7 @@ void Bus::tick() {
     if (step_counter >= 1232) {
         step_counter = 0;
 
-        io[0x04] &= ~(1 << 1);
+        io[0x04] &= ~(1 << 1);  // Clear HBlank flag
 
         vcount = (vcount + 1) % 228;
         io[0x06] = vcount & 0xFF;
@@ -496,7 +840,10 @@ void Bus::tick() {
         }
 
         if (vcount == 160) {
-            io[0x04] |= 1;
+            dbg << "[VBLANK_IF_SET] frame_cycle_total=" << step_counter
+                << " vcount=" << (int)vcount << "\n";
+            dbg.flush();
+            io[0x04] |= 1;  // VBlank flag
 
             if (io[0x04] & (1 << 3)) {
                 uint16_t IF = io[0x202] | (io[0x203] << 8);
@@ -505,44 +852,30 @@ void Bus::tick() {
                 io[0x203] = (IF >> 8) & 0xFF;
             }
 
-            for (int i = 0; i < 4; i++) {
-                if ((dma[i].cnt & (1u << 31)) &&
-                    (((dma[i].cnt >> 28) & 0x3) == 1))
-                    executeDMA(i);
-            }
-
-           /* uint16_t biosFlags = iwram[0x7FF8] | (iwram[0x7FF9] << 8);
-            biosFlags |= 1;
-            iwram[0x7FF8] = biosFlags & 0xFF;
-            iwram[0x7FF9] = (biosFlags >> 8) & 0xFF;*/
+            onVBlank();
         }
         else if (vcount == 0) {
-            io[0x04] &= ~1;
+            io[0x04] &= ~1;  // Clear VBlank flag
+            if (ppuptr) {
+                auto se = [](int32_t v) -> int32_t {
+                    return (v & 0x08000000) ? (v | 0xF0000000) : (v & 0x0FFFFFFF);
+                    };
+                int32_t r38 = (int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24));
+                int32_t r3C = (int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24));
+                ppuptr->bg3RefX = se(r38);
+                ppuptr->bg3RefY = se(r3C);
+            }
         }
     }
-
-    static uint16_t prev_pending = 0;
-
-    uint16_t IME = io[0x208] | (io[0x209] << 8);
-    uint16_t IE = io[0x200] | (io[0x201] << 8);
-    uint16_t IF = io[0x202] | (io[0x203] << 8);
-
-    bool hardware_wakeup = (IE & IF) != 0;
-    if (hardware_wakeup)
-        cpuptr->halted = false;
-
-    bool irq_pending = (IME & 1) && (IE & prev_pending) != 0;
-    if (irq_pending) {
-        if (!(cpuptr->cpsr & (1 << 7)))
-            cpuptr->triggerIRQ();
-    }
-
-    prev_pending = IF;
+    // IRQ dispatch removed — call checkIRQ() from main loop instead
 }
+
+
 // -------------------------------------------------------------------
 // Load the BIOS image into memory
 // -------------------------------------------------------------------
 void Bus::loadBIOS(const char* path) {
+
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
         std::cout << "failed to load BIOS\n";
@@ -554,6 +887,86 @@ void Bus::loadBIOS(const char* path) {
         std::cout << "WARNING: BIOS size is " << size << " bytes, expected 16384 (0x4000)\n";
     }
     f.read((char*)bios.data(), std::min(size, (std::streamsize)0x4000));
+
+    // NEW: initialise BIOS latch with first word of BIOS
+    bios_latch = bios[0] | (bios[1] << 8) | (bios[2] << 16) | (bios[3] << 24);
+    dbg << "[BIOS_08] " << std::hex
+        << (int)bios[0x08] << " "
+        << (int)bios[0x09] << " "
+        << (int)bios[0x0a] << " "
+        << (int)bios[0x0b] << "\n";
+
+    dbg << "[BIOS_VERIFY] bytes at 0x390: ";
+    for (int i = 0x390; i < 0x3A0; i++) {
+        dbg << std::hex << (int)bios[i] << " ";
+    }
+    dbg << "\n";
+    dbg.flush();
+}
+
+
+//--------------------------------------------------------------------
+// detect save type
+//--------------------------------------------------------------------
+void Bus::detectSaveType() {
+    const char* markers[] = {
+        "EEPROM_V",
+        "SRAM_V",
+        "FLASH_V",
+        "FLASH512_V",
+        "FLASH1M_V"
+    };
+    SaveType types[] = {
+        SAVE_EEPROM,
+        SAVE_SRAM,
+        SAVE_FLASH64,
+        SAVE_FLASH64,
+        SAVE_FLASH128
+    };
+
+    for (int i = 0; i < 5; i++) {
+        const char* marker = markers[i];
+        int markerLen = (int)strlen(marker);
+        for (int j = 0; j < (int)rom.size() - markerLen; j++) {
+            if (memcmp(rom.data() + j, marker, markerLen) == 0) {
+                saveType = types[i];
+                dbg << "[SAVE_TYPE_DETECTED] marker=\"" << marker
+                    << "\" at romOffset=0x" << std::hex << j
+                    << " saveType=" << std::dec << (int)saveType << "\n";
+                dbg.flush();
+                goto done;
+            }
+        }
+    }
+    dbg << "[SAVE_TYPE_DETECTED] no marker found, saveType=NONE/default="
+        << std::dec << (int)saveType << "\n";
+    dbg.flush();
+
+done:
+    switch (saveType) {
+    case SAVE_SRAM:     saveData.assign(0x8000, 0xFF); break;
+    case SAVE_EEPROM:   saveData.assign(0x2000, 0xFF); detectEEPROMSize(); break;
+    case SAVE_FLASH64:  saveData.assign(0x10000, 0xFF); break;
+    case SAVE_FLASH128: saveData.assign(0x20000, 0xFF); break;
+    default: break;
+    }
+
+    dbg << "[SAVE_TYPE_FINAL] saveType=" << std::dec << (int)saveType
+        << " saveData.size()=0x" << std::hex << saveData.size() << "\n";
+    dbg.flush();
+}
+void Bus::saveToDisk(const char* path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) {
+        return;
+    }
+    f.write((char*)saveData.data(), saveData.size());
+}
+
+void Bus::loadFromDisk(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return;
+    f.read((char*)saveData.data(), saveData.size());
 }
 
 // -------------------------------------------------------------------
@@ -562,13 +975,13 @@ void Bus::loadBIOS(const char* path) {
 void Bus::loadROM(const char* path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) {
-        std::cout << "failed to load ROM — file not found: " << path << "\n";
+        std::cout << "failed to load ROM\n";
         return;
     }
     f.read((char*)rom.data(), 0x2000000);
-
+    detectSaveType();
+    loadFromDisk("game.sav");
 }
-
 
 void Bus::setKeyState(int bit, bool pressed) {
 
