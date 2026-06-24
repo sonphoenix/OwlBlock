@@ -130,7 +130,6 @@ void CPU::restoreCPSRFromSPSR() {
         dbg << "[CPSR_RESTORE_ABORT_NO_SPSR]\n";
         return;
     }
-
     uint8_t newMode = spsr & 0x1F;
     bool valid = (newMode == 0x10 || newMode == 0x11 || newMode == 0x12 ||
         newMode == 0x13 || newMode == 0x17 || newMode == 0x1B ||
@@ -142,12 +141,16 @@ void CPU::restoreCPSRFromSPSR() {
         dbg.flush();
         return;
     }
-
+    dbg << "[RESTORE_CPSR] oldMode=0x" << std::hex << (int)oldMode
+        << " newMode=0x" << (int)newMode
+        << " R0_before=0x" << reg[0] << "\n";
+    dbg.flush();
     if (newMode != oldMode)
         switchMode(newMode);
     cpsr = spsr;
+    dbg << "[RESTORE_CPSR_AFTER] R0_after=0x" << std::hex << reg[0] << "\n";
+    dbg.flush();
 }
-
 
 void CPU::skipBIOS() {
     // Clear WRAM stacks and BIOS IRQ vector/flags
@@ -232,7 +235,23 @@ int CPU::Step() {
     }
 
     uint32_t prev_pc = reg[15];
-
+    /*if (prev_pc == 0x128) {
+        dbg << "[AT_128] R0=0x" << std::hex << reg[0] << "\n";
+        dbg.flush();
+    }
+    if ((cpsr & 0x1F) == 0x12) {  // IRQ mode
+        dbg << "[IRQ_MODE_STEP] PC=0x" << std::hex << prev_pc
+            << " SP=0x" << reg[13]
+            << " R0=0x" << reg[0] << "\n";
+        dbg.flush();
+    }
+    if (prev_pc >= 0x08000394 && prev_pc <= 0x0800039A) {
+        dbg << "[LOOP_STEP] PC=0x" << std::hex << prev_pc
+            << " R0=0x" << reg[0]
+            << " SP=0x" << reg[13]
+            << " mode=0x" << (cpsr & 0x1F) << "\n";
+        dbg.flush();
+    }*/
     if (cpsr & (1 << 5)) {
         uint16_t instr = bus.read16(prev_pc);
         if (prev_pc < 0x4000)
@@ -292,12 +311,12 @@ void CPU::executeBranch(uint32_t instruction) {
     if (offset & 0x800000) offset |= 0xFF000000;
     uint32_t pc = reg[15] + 4;
 
-    dbg << "[BRANCH] reg15_before=0x" << std::hex << reg[15]
+    /*dbg << "[BRANCH] reg15_before=0x" << std::hex << reg[15]
         << " offset_raw=0x" << (instruction & 0xFFFFFF)
         << " offset_signed=0x" << offset
         << " pc_calc=0x" << pc
         << " target=0x" << (pc + (offset << 2)) << "\n";
-    dbg.flush();
+    dbg.flush();*/
 
     if (link) {
         reg[14] = pc - 4;
@@ -509,6 +528,10 @@ void CPU::executeDataProcessing(uint32_t instruction) {
           }
   }
     if (S) {
+        /*dbg << "[SUBS_PC_LR] result=0x" << std::hex << result
+            << " R0=0x" << reg[0]
+            << " mode_before=0x" << (int)(oldCpsr & 0x1F) << "\n";
+        dbg.flush();*/
         uint32_t beforeFlags = cpsr;
         if (isArithmetic) {
             setFlags(result, full, rnVal, op2, isSubtract);
@@ -772,7 +795,11 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
     for (int i = 0; i < 16; i++) {
         if (regList & (1 << i)) {
             if (L) {
+
                 uint32_t val = bus.read32(address & ~3);
+                /*dbg << "[LDM_LOAD] reg=" << i << " addr=0x" << std::hex << address
+                    << " val=0x" << val << "\n";
+                dbg.flush();*/
                 if (S && !(regList & (1 << 15))) {
                     if (i >= 8 && i <= 12) reg_user[i - 8] = val;
                     else if (i == 13)      reg_user[5] = val;
@@ -787,6 +814,11 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
             else {
                 uint32_t val;
                 if (S) {
+                  /*  dbg << "[LDM_S] L=" << (int)L << " PC_in_list=" << ((regList >> 15) & 1)
+                        << " Rn=" << (int)Rn << " list=0x" << std::hex << regList
+                        << " base=0x" << base
+                        << " PC=0x" << reg[15] << "\n";
+                    dbg.flush();*/
                     val = (i >= 8 && i <= 12) ? reg_user[i - 8] :
                         (i == 13) ? reg_user[5] :
                         (i == 14) ? reg_user[6] : reg[i];
@@ -815,6 +847,7 @@ void CPU::executeLoadStoreMultiple(uint32_t instruction) {
         restoreCPSRFromSPSR();
     }
 }
+
 void CPU::executePSRTransfer(uint32_t instruction) {
     uint8_t Pd = (instruction >> 22) & 1;
     uint8_t op = (instruction >> 21) & 1;
@@ -923,6 +956,8 @@ void CPU::executeSWI(uint32_t instruction) {
 }
 
 void CPU::triggerIRQ() {
+    dbg << "[TRIGGER_IRQ_PC] reg15=0x" << std::hex << reg[15] << "\n";
+    dbg.flush();
     if ((cpsr & 0x1F) == 0x12) return;
     if (cpsr & (1 << 7)) {
         return;
@@ -936,7 +971,11 @@ void CPU::triggerIRQ() {
     halted = false;
     uint32_t oldCPSR = cpsr;
     bool thumb = (cpsr >> 5) & 1;
-    uint32_t returnAddr = thumb ? reg[15] + 2 : reg[15] + 4;
+    uint32_t returnAddr = reg[15] + 4;
+    dbg << "[IRQ_RETURN_ADDR] thumb=" << thumb
+        << " reg15=0x" << std::hex << reg[15]
+        << " returnAddr=0x" << returnAddr << "\n";
+    dbg.flush();
     if (returnAddr >= 0x081E3560 && returnAddr <= 0x081E3580) {
         dbg << "[IRQ_RETURN_NEAR_TM3LOOP] returnAddr=0x" << std::hex << returnAddr
             << " interruptedPC=0x" << reg[15]
@@ -945,6 +984,8 @@ void CPU::triggerIRQ() {
     }
     spsr_irq = oldCPSR;
     switchMode(MODE_IRQ);
+    dbg << "[IRQ_SP] SP_irq=0x" << std::hex << reg[13] << "\n";
+    dbg.flush();
     cpsr = (oldCPSR & ~0x3F) | MODE_IRQ | (1 << 7); // I=1, T=0
     reg[14] = returnAddr;
     reg[15] = 0x18;
