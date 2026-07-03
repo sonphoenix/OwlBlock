@@ -63,6 +63,19 @@ void Bus::onHBlank() {
     }
 }
 
+static inline bool isOpenBusRegion(uint32_t address) {
+    // Mirrors the same region checks used in Bus::read8's dispatch chain.
+    if (address < 0x4000) return false;                                // BIOS
+    if (address >= 0x02000000 && address < 0x03000000) return false;   // EWRAM
+    if (address >= 0x03000000 && address < 0x04000000) return false;   // IWRAM
+    if (address >= 0x04000000 && address < 0x04000400) return false;   // IO
+    if (address >= 0x05000000 && address < 0x06000000) return false;   // PRAM
+    if (address >= 0x06000000 && address < 0x07000000) return false;   // VRAM
+    if (address >= 0x07000000 && address < 0x08000000) return false;   // OAM
+    if (address >= 0x0E000000 && address <= 0x0FFFFFFF) return false;  // SRAM/Flash
+    if (address >= 0x08000000 && address < 0x0E000000) return false;   // ROM
+    return true; // everything else (including 0x10000000+) = truly unmapped -> open bus
+}
 void Bus::detectEEPROMSize() {
 
     uint32_t romSize = 0;
@@ -74,6 +87,8 @@ void Bus::detectEEPROMSize() {
         << " eepromLargeAddress=" << eepromLargeAddress << "\n";
     dbg.flush();
 }
+
+
 
 void Bus::writeEEPROM(uint8_t bit) {
     switch (eepromState) {
@@ -107,7 +122,7 @@ void Bus::writeEEPROM(uint8_t bit) {
                     eepromReadBuffer[i] = (offset + i < (int)saveData.size())
                     ? saveData[offset + i] : 0xFF;
                 eepromReadBit = 0;
-                dbg << "[EEPROM_READ_SETUP] address=0x" << std::hex << eepromAddress
+                /*dbg << "[EEPROM_READ_SETUP] address=0x" << std::hex << eepromAddress
                     << " saveData[0]=0x" << (int)saveData[offset]
                     << " saveData[1]=0x" << (int)saveData[offset + 1]
                     << " saveData[2]=0x" << (int)saveData[offset + 2]
@@ -115,15 +130,15 @@ void Bus::writeEEPROM(uint8_t bit) {
                 dbg << "[EEPROM_TXN] READ requestType=0x" << std::hex << (int)eepromRequestType
                     << " address=0x" << eepromAddress
                     << " byteOffset=0x" << offset << "\n";
-                dbg.flush();
+                dbg.flush();*/
             }
             else {
                 eepromState = EEPROM_WRITE_DATA;
                 eepromBitsLeft = 64;
                 eepromBuffer = 0;
-                dbg << "[EEPROM_TXN] WRITE_START requestType=0x" << std::hex << (int)eepromRequestType
+                /*dbg << "[EEPROM_TXN] WRITE_START requestType=0x" << std::hex << (int)eepromRequestType
                     << " address=0x" << eepromAddress << "\n";
-                dbg.flush();
+                dbg.flush();*/
             }
         }
         break;
@@ -138,13 +153,13 @@ void Bus::writeEEPROM(uint8_t bit) {
                 if (offset + i < saveData.size())
                     saveData[offset + i] = byte;
             }
-            dbg << "[EEPROM_TXN] WRITE_COMPLETE address=0x" << std::hex << eepromAddress
+           /* dbg << "[EEPROM_TXN] WRITE_COMPLETE address=0x" << std::hex << eepromAddress
                 << " data=0x" << eepromBuffer << "\n";
             dbg << "[EEPROM_VERIFY] saveData[0]=0x" << (int)saveData[0]
                 << " saveData[1]=0x" << (int)saveData[1]
                 << " offset=" << std::dec << offset
                 << " saveData.size()=" << saveData.size() << "\n";
-            dbg.flush();
+            dbg.flush();*/
             eepromWriteDone = true;
             eepromState = EEPROM_WRITE_STOP;
             eepromBitsLeft = 1;
@@ -212,9 +227,9 @@ uint8_t Bus::readEEPROM() {
         return 1;  // EEPROM ready / not in a read transaction
     }
 }
-// -------------------------------------------------------------------
-// Read a byte from the GBA address space
-// -------------------------------------------------------------------
+
+
+
 uint8_t Bus::read8(uint32_t address) {
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read addr=0x" << std::hex << address
@@ -227,11 +242,10 @@ uint8_t Bus::read8(uint32_t address) {
     }
 
     uint8_t result = 0;
+    bool valid = true;
+
     if (address < 0x4000) {
         if (cpuptr->reg[15] >= 0x4000) {
-            dbg << "[BIOS_LATCH_HIT] addr=0x" << std::hex << address
-                << " PC=0x" << cpuptr->reg[15] << "\n";
-            dbg.flush();
             result = (bios_latch >> ((address & 3) * 8)) & 0xFF;
         }
         else
@@ -239,12 +253,6 @@ uint8_t Bus::read8(uint32_t address) {
     }
     else if (address >= 0x02000000 && address < 0x03000000) {
         result = ewram[mirror(address, 0x02000000, 0x40000)];
-        if (address == 0x02000002 || address == 0x02000003) {
-            dbg << "[READ_0002] addr=0x" << std::hex << address
-                << " val=0x" << (int)result
-                << " PC=0x" << cpuptr->reg[15] << "\n";
-            dbg.flush();
-        }
     }
     else if (address >= 0x03000000 && address < 0x04000000) {
         result = iwram[mirror(address, 0x03000000, 0x8000)];
@@ -266,15 +274,31 @@ uint8_t Bus::read8(uint32_t address) {
     else if (address >= 0x07000000 && address < 0x08000000) {
         result = oam[mirror(address, 0x07000000, 0x400)];
     }
-    else if (address >= 0x08000000) {
+    else if (address >= 0x0E000000 && address <= 0x0FFFFFFF) {
+        if (address >= 0x0F000000) return (mdr >> ((address & 3) * 8)) & 0xFF;
+        if (saveType == SAVE_FLASH64 || saveType == SAVE_FLASH128)
+            return readFlash(address);
+        if (saveType == SAVE_SRAM)
+            return (address - 0x0E000000 < saveData.size())
+            ? saveData[address - 0x0E000000] : 0xFF;
+        return 0xFF;
+    }
+    else if (address >= 0x08000000 && address < 0x0E000000) {
         result = rom[address & 0x1FFFFFF];
     }
+    else {
+        // truly unmapped — return open bus
+        valid = false;
+        return (mdr >> ((address & 3) * 8)) & 0xFF;
+    }
+
+    if (valid) {
+        // Byte access mirrors the value across all 4 lanes of the MDR
+        mdr = (uint32_t)result * 0x01010101u;
+    }
+
     return result;
 }
-
-// -------------------------------------------------------------------
-// Read a half‑word (16 bits) from the GBA address space
-// -------------------------------------------------------------------
 uint16_t Bus::read16(uint32_t address) {
     if ((address & ~1) >= 0x0D000000 && (address & ~1) <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read16 addr=0x" << std::hex << address
@@ -286,13 +310,37 @@ uint16_t Bus::read16(uint32_t address) {
         return 0xFF;
     }
     uint32_t addr = address & ~1;
-    return (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
+    uint16_t result = (uint16_t)read8(addr) | ((uint16_t)read8(addr + 1) << 8);
+    // Only a genuine memory-backed read re-latches the MDR.
+    // Open-bus reads must leave mdr untouched — nothing actually drove the bus.
+    if (!isOpenBusRegion(addr)) {
+        mdr = (uint32_t)result * 0x00010001u;
+    }
+    return result;
 }
-
-// -------------------------------------------------------------------
-// Read a word (32 bits) from the GBA address space
-// -------------------------------------------------------------------
 uint32_t Bus::read32(uint32_t address) {
+    if (address >= 0x3007f88 && address <= 0x3007f9c) {
+        uint32_t alignedAddr = address & ~3;
+        uint32_t val = (uint32_t)read8(alignedAddr)
+            | ((uint32_t)read8(alignedAddr + 1) << 8)
+            | ((uint32_t)read8(alignedAddr + 2) << 16)
+            | ((uint32_t)read8(alignedAddr + 3) << 24);
+        dbg << "[STACK_READ] addr=0x" << std::hex << address
+            << " val=0x" << val
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+    if ((address & ~3) == 0x03FFFFFC) {
+        uint32_t alignedAddr = address & ~3;
+        uint32_t val = (uint32_t)read8(alignedAddr)
+            | ((uint32_t)read8(alignedAddr + 1) << 8)
+            | ((uint32_t)read8(alignedAddr + 2) << 16)
+            | ((uint32_t)read8(alignedAddr + 3) << 24);
+        dbg << "[READ_3FFFFFC] val=0x" << std::hex << val
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+
     if ((address & ~3) >= 0x0D000000 && (address & ~3) <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read32 addr=0x" << std::hex << address
             << " state=" << (int)eepromState
@@ -304,7 +352,6 @@ uint32_t Bus::read32(uint32_t address) {
     }
 
     static uint32_t lastLoggedAddr = 0;
-    static int loopCount = 0;
     if (cpuptr->reg[15] >= 0x390 && cpuptr->reg[15] <= 0x3A0) {
         if (address != lastLoggedAddr) {
             dbg << "[LOOP_READ] addr=0x" << std::hex << address
@@ -317,31 +364,35 @@ uint32_t Bus::read32(uint32_t address) {
     if (address < 0x4000 && cpuptr->reg[15] >= 0x4000) {
         return bios_latch;
     }
+
     uint32_t alignedAddr = address & ~3;
-    return (uint32_t)read8(alignedAddr)
+    uint32_t result = (uint32_t)read8(alignedAddr)
         | ((uint32_t)read8(alignedAddr + 1) << 8)
         | ((uint32_t)read8(alignedAddr + 2) << 16)
         | ((uint32_t)read8(alignedAddr + 3) << 24);
+
+    // Only a genuine memory-backed read re-latches the MDR.
+    if (!isOpenBusRegion(alignedAddr)) {
+        mdr = result;
+    }
+
+    return result;
 }
 
 void Bus::executeDMA(int channel) {
-    dbg << "[DMA" << channel << "] src=0x" << std::hex << dma[channel].isad
+   /* dbg << "[DMA_EXEC] ch=" << channel
+        << " src=0x" << std::hex << dma[channel].isad
         << " dst=0x" << dma[channel].idad
-        << " cnt=0x" << dma[channel].cnt << "\n";
-    if (channel == 3) {
-        dbg << "[DMA3] src=0x" << std::hex << dma[channel].isad
-            << " dst=0x" << dma[channel].idad
-            << " cnt=0x" << dma[channel].cnt << "\n";
-        dbg.flush();
-    }
+        << " cnt=0x" << dma[channel].cnt
+        << " R0_before=0x" << cpuptr->reg[0] << "\n";
+    dbg.flush();*/
+
     bool isFIFO = (((dma[channel].cnt >> 28) & 0x3) == 3) &&
         (dma[channel].dad == 0x040000A0 ||
             dma[channel].dad == 0x040000A4);
-
     uint32_t src = dma[channel].isad;
     uint32_t dest = dma[channel].idad;
     uint32_t count;
-
     if (isFIFO) {
         count = 4;
     }
@@ -350,25 +401,20 @@ void Bus::executeDMA(int channel) {
         if (count == 0)
             count = (channel == 3) ? 0x10000 : 0x4000;
     }
-
-    // Auto-detect EEPROM address width from write DMA count
     if (saveType == SAVE_EEPROM &&
         dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
         if (count == 73) eepromLargeAddress = false;
         else if (count == 81) eepromLargeAddress = true;
     }
-
     uint8_t dest_adj = isFIFO ? 2 : (dma[channel].cnt >> 21) & 0x3;
     uint8_t src_adj = (dma[channel].cnt >> 23) & 0x3;
     uint8_t repeat = (dma[channel].cnt >> 25) & 0x1;
     uint8_t word = (dma[channel].cnt >> 26) & 0x1;
     uint8_t irq = (dma[channel].cnt >> 30) & 0x1;
     uint8_t unit = word ? 4 : 2;
-
     for (uint32_t i = 0; i < count; i++) {
         if (word) write32(dest, read32(src));
         else      write16(dest, read16(src));
-
         switch (dest_adj) {
         case 0: dest += unit; break;
         case 1: dest -= unit; break;
@@ -381,10 +427,8 @@ void Bus::executeDMA(int channel) {
         case 2: break;
         }
     }
-
     dma[channel].isad = src;
     dma[channel].idad = (dest_adj == 3) ? dma[channel].dad : dest;
-
     if (saveType == SAVE_EEPROM &&
         dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
         if (eepromState == EEPROM_WRITE_DATA ||
@@ -394,26 +438,27 @@ void Bus::executeDMA(int channel) {
             eepromState = EEPROM_IDLE;
         }
     }
-
     if (!repeat)
         dma[channel].cnt &= ~(1u << 31);
-
     if (irq) {
         uint16_t IF = io[0x202] | (io[0x203] << 8);
         IF |= (1 << (8 + channel));
         io[0x202] = IF & 0xFF;
         io[0x203] = (IF >> 8) & 0xFF;
     }
-}
 
+    dbg << "[DMA_EXEC_DONE] ch=" << channel
+        << " R0_after=0x" << std::hex << cpuptr->reg[0] << "\n";
+    dbg.flush();
+}
 void Bus::writeDMA(uint32_t address, uint8_t value) {
     int ch = (address - DMA0_BASE) / 12;
     int offset = (address - DMA0_BASE) % 12;
 
-    dbg << "[DMA_WRITE] ch=" << ch << " offset=" << offset
+    /*dbg << "[DMA_WRITE] ch=" << ch << " offset=" << offset
         << " val=0x" << std::hex << (int)value
         << " PC=0x" << cpuptr->reg[15] << "\n";
-    dbg.flush();
+    dbg.flush();*/
 
     if (offset < 4) { ((uint8_t*)&dma[ch].sad)[offset] = value; }
     else if (offset < 8) { ((uint8_t*)&dma[ch].dad)[offset - 4] = value; }
@@ -433,6 +478,32 @@ void Bus::writeDMA(uint32_t address, uint8_t value) {
 // Write a byte to the GBA address space
 // -------------------------------------------------------------------
 void Bus::write8(uint32_t address, uint8_t value) {
+    mdr = (uint32_t)value * 0x01010101u;
+
+    if (address >= 0x0600C000 && address <= 0x0600C010) {
+        dbg << "[VRAM_CB3_WRITE] addr=0x" << std::hex << address
+            << " val=0x" << (int)value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+    if ((address & ~1) == 0x0303010C || address == 0x0303010C || address == 0x0303010D) {
+        dbg << "[WRITE_303010C] addr=0x" << std::hex << address
+            << " val=0x" << (int)value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+    if (address >= 0x02000000 && address <= 0x02000003 && value != 0) {
+        dbg << "[EWRAM_NONZERO_WRITE] addr=0x" << std::hex << address
+            << " val=0x" << (int)value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
+    if (address >= 0x03007FF8 && address <= 0x03007FFF) {
+        dbg << "[IWRAM_TAIL_WRITE] addr=0x" << std::hex << address
+            << " val=0x" << (int)value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write8 addr=0x" << std::hex << address
             << " val=0x" << (int)value
@@ -456,6 +527,16 @@ void Bus::write8(uint32_t address, uint8_t value) {
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
     }
+    if (address >= 0x0E000000 && address <= 0x0EFFFFFF) {
+        if (saveType == SAVE_FLASH64 || saveType == SAVE_FLASH128)
+            writeFlash(address, value);
+        else if (saveType == SAVE_SRAM) {
+            uint32_t offset = address - 0x0E000000;
+            if (offset < saveData.size())
+                saveData[offset] = value;
+        }
+        return;
+    }
     if (address >= 0x02000000 && address < 0x03000000) {
         ewram[mirror(address, 0x02000000, 0x40000)] = value;
         return;
@@ -464,10 +545,10 @@ void Bus::write8(uint32_t address, uint8_t value) {
         uint32_t offset = mirror(address, 0x03000000, 0x8000);
         iwram[offset] = value;
         if (offset >= 0x7FF8 && offset <= 0x7FFF) {
-           /* dbg << "[IWRAM_TAIL] offset=0x" << std::hex << offset
-                << " value=0x" << (int)value
-                << " PC=0x" << cpuptr->reg[15] << "\n";
-            dbg.flush();*/
+            /* dbg << "[IWRAM_TAIL] offset=0x" << std::hex << offset
+                 << " value=0x" << (int)value
+                 << " PC=0x" << cpuptr->reg[15] << "\n";
+             dbg.flush();*/
         }
         return;
     }
@@ -563,6 +644,41 @@ void Bus::write8(uint32_t address, uint8_t value) {
             dbg.flush();
             io[ioAddr] = value;
             break;
+        case 0x28: case 0x29: case 0x2A: case 0x2B:
+            io[ioAddr] = value;
+            {
+                int32_t refX = (int32_t)(io[0x28] | (io[0x29] << 8) | (io[0x2A] << 16) | (io[0x2B] << 24));
+                if (refX & 0x08000000) refX |= 0xF0000000; else refX &= 0x0FFFFFFF;
+                ppuptr->bg2RefX = refX;
+            }
+            break;
+
+        case 0x2C: case 0x2D: case 0x2E: case 0x2F:
+            io[ioAddr] = value;
+            {
+                int32_t refY = (int32_t)(io[0x2C] | (io[0x2D] << 8) | (io[0x2E] << 16) | (io[0x2F] << 24));
+                if (refY & 0x08000000) refY |= 0xF0000000; else refY &= 0x0FFFFFFF;
+                ppuptr->bg2RefY = refY;
+            }
+            break;
+
+        case 0x38: case 0x39: case 0x3A: case 0x3B:
+            io[ioAddr] = value;
+            {
+                int32_t refX = (int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24));
+                if (refX & 0x08000000) refX |= 0xF0000000; else refX &= 0x0FFFFFFF;
+                ppuptr->bg3RefX = refX;
+            }
+            break;
+
+        case 0x3C: case 0x3D: case 0x3E: case 0x3F:
+            io[ioAddr] = value;
+            {
+                int32_t refY = (int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24));
+                if (refY & 0x08000000) refY |= 0xF0000000; else refY &= 0x0FFFFFFF;
+                ppuptr->bg3RefY = refY;
+            }
+            break;
         default:
             io[ioAddr] = value;
             break;
@@ -595,19 +711,10 @@ void Bus::write8(uint32_t address, uint8_t value) {
         return;
     }
 }
-void Bus::write16(uint32_t address, uint16_t value) {
-    if ((address & ~1) == 0x03004ca4) {
-        dbg << "[WRITE_3004CA4] write16 val=0x" << std::hex << value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
 
-    if (address == 0x0400010E || address + 1 == 0x0400010E) {
-        dbg << "[TM3CNT_H_WRITE16] addr=0x" << std::hex << address
-            << " val=0x" << value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
+void Bus::write16(uint32_t address, uint16_t value) {
+    mdr = (uint32_t)value * 0x00010001u;
+
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write16 addr=0x" << std::hex << address
             << " val=0x" << value
@@ -646,16 +753,17 @@ void Bus::write16(uint32_t address, uint16_t value) {
     // Default: split into two write8 calls
     write8(addr, value & 0xFF);
     write8(addr + 1, (value >> 8) & 0xFF);
+    mdr = (uint32_t)value * 0x00010001u;   // restore half-mirror after byte sub-writes
 }
-
 void Bus::write32(uint32_t address, uint32_t value) {
+    mdr = value;
 
     uint32_t addr = address & ~3;
     if ((address & ~3) <= 0x03004ca4 && (address & ~3) + 3 >= 0x03004ca4) {
-    dbg << "[WRITE_3004CA4] write32 val=0x" << std::hex << value
-        << " PC=0x" << cpuptr->reg[15] << "\n";
-    dbg.flush();
-}
+        dbg << "[WRITE_3004CA4] write32 val=0x" << std::hex << value
+            << " PC=0x" << cpuptr->reg[15] << "\n";
+        dbg.flush();
+    }
     if (addr >= 0x0D000000 && addr <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write32 addr=0x" << std::hex << addr
             << " val=0x" << value
@@ -718,12 +826,17 @@ void Bus::write32(uint32_t address, uint32_t value) {
     write8(addr + 1, (value >> 8) & 0xFF);
     write8(addr + 2, (value >> 16) & 0xFF);
     write8(addr + 3, (value >> 24) & 0xFF);
+    mdr = value;   // restore word value after byte sub-writes
 }
-
 void Bus::checkIRQ() {
     uint16_t IME = io[0x208] | (io[0x209] << 8);
     uint16_t IE = io[0x200] | (io[0x201] << 8);
     uint16_t IF = io[0x202] | (io[0x203] << 8);
+   /*if (cpuptr->halted) {                          // ADD THIS BLOCK
+        dbg << "[HALTED_CHECK] IE=0x" << std::hex << IE
+            << " IF=0x" << IF << "\n";
+        dbg.flush();
+    }*/
     if (IE & IF) {
         if (cpuptr->halted) {
             dbg << "[UNHALT] IE=0x" << std::hex << IE << " IF=0x" << IF << "\n";
@@ -732,12 +845,10 @@ void Bus::checkIRQ() {
         cpuptr->halted = false;
     }
     if ((cpuptr->cpsr & 0x1F) == 0x12) return;
-
     if ((IME & 1) && (IE & IF) && !(cpuptr->cpsr & (1 << 7))) {
         cpuptr->triggerIRQ();
     }
 }
-
 // -------------------------------------------------------------------
 // Advance the LCD scanline counter (call after every CPU step)
 // -------------------------------------------------------------------
@@ -843,7 +954,7 @@ void Bus::tick() {
             dbg << "[VBLANK_IF_SET] frame_cycle_total=" << step_counter
                 << " vcount=" << (int)vcount << "\n";
             dbg.flush();
-            io[0x04] |= 1;  // VBlank flag
+            io[0x04] |= 1;
 
             if (io[0x04] & (1 << 3)) {
                 uint16_t IF = io[0x202] | (io[0x203] << 8);
@@ -853,18 +964,19 @@ void Bus::tick() {
             }
 
             onVBlank();
-        }
-        else if (vcount == 0) {
-            io[0x04] &= ~1;  // Clear VBlank flag
+
             if (ppuptr) {
                 auto se = [](int32_t v) -> int32_t {
                     return (v & 0x08000000) ? (v | 0xF0000000) : (v & 0x0FFFFFFF);
                     };
-                int32_t r38 = (int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24));
-                int32_t r3C = (int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24));
-                ppuptr->bg3RefX = se(r38);
-                ppuptr->bg3RefY = se(r3C);
+                ppuptr->bg2RefX = se((int32_t)(io[0x28] | (io[0x29] << 8) | (io[0x2A] << 16) | (io[0x2B] << 24)));
+                ppuptr->bg2RefY = se((int32_t)(io[0x2C] | (io[0x2D] << 8) | (io[0x2E] << 16) | (io[0x2F] << 24)));
+                ppuptr->bg3RefX = se((int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24)));
+                ppuptr->bg3RefY = se((int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24)));
             }
+        }
+        else if (vcount == 0) {
+            io[0x04] &= ~1;
         }
     }
     // IRQ dispatch removed — call checkIRQ() from main loop instead
@@ -994,4 +1106,134 @@ void Bus::setKeyState(int bit, bool pressed) {
 
     io[0x130] = keys & 0xFF;
     io[0x131] = (keys >> 8) & 0xFF;
+}
+
+uint8_t Bus::readFlash(uint32_t address) {
+    uint32_t offset = (address - 0x0E000000) + flashBank * 0x10000;
+    dbg << "[FLASH_READ] this=0x" << std::hex << (uintptr_t)this
+        << " idMode=" << flashIdMode
+        << " addr=0x" << address
+        << " offset=0x" << offset
+        << " bank=" << (int)flashBank
+        << " state=" << (int)flashState
+        << " erasePending=" << flashErasePending
+        << " val=0x" << (int)((offset < saveData.size()) ? saveData[offset] : 0xFF)
+        << " PC=0x" << cpuptr->reg[15] << "\n";
+    dbg.flush();
+
+    if (flashIdMode) {
+        if ((address & 0xFFFF) == 0) return 0xC2;
+        if ((address & 0xFFFF) == 1) return 0x09;
+        return 0xFF;
+    }
+
+    if (flashWritePending && offset == flashWriteAddr) {
+        flashWritePending = false;
+        return flashWriteVal ^ 0x80;
+    }
+
+    // Only poll on the erased sector address
+    if (flashErasePending && (offset & ~0xFFF) == flashEraseSectorStart) {
+        flashErasePollCount++;
+        if (flashErasePollCount < 4) {
+            // bit6 toggles, bit7=0 = busy
+            return (flashErasePollCount & 1) ? 0x40 : 0x00;
+        }
+        else {
+            flashErasePending = false;
+            return 0xFF; // done, erased
+        }
+    }
+
+    return (offset < saveData.size()) ? saveData[offset] : 0xFF;
+}
+
+
+void Bus::writeFlash(uint32_t address, uint8_t value) {
+    uint32_t offset = (address - 0x0E000000) + flashBank * 0x10000;
+    uint32_t shortAddr = address & 0xFFFF;
+
+   /* dbg << "[FLASH_WRITE] addr=0x" << std::hex << address
+        << " shortAddr=0x" << shortAddr
+        << " val=0x" << (int)value
+        << " state=" << (int)flashState
+        << " bank=" << (int)flashBank
+        << " PC=0x" << cpuptr->reg[15] << "\n";
+    dbg.flush();*/
+
+    switch (flashState) {
+    case FLASH_READ:
+        if (shortAddr == 0x5555 && value == 0xAA)
+            flashState = FLASH_CMD1;
+        break;
+
+    case FLASH_ERASE_CMD:
+        if (shortAddr == 0x5555 && value == 0xAA) {
+            flashEraseArmed = true;
+            flashState = FLASH_CMD1;
+        }
+        else if (shortAddr == 0x5555 && value == 0x10) {
+            std::fill(saveData.begin(), saveData.end(), 0xFF);
+            flashState = FLASH_READ;
+        }
+        break;
+
+    case FLASH_CMD1:
+        if (shortAddr == 0x2AAA && value == 0x55)
+            flashState = FLASH_CMD2;
+        else {
+            flashEraseArmed = false;
+            flashState = FLASH_READ;
+        }
+        break;
+
+    case FLASH_CMD2:
+        flashState = FLASH_READ;
+        if (flashEraseArmed && value == 0x30) {
+            flashEraseArmed = false;
+            uint32_t sectorStart = offset & ~0xFFF;
+            for (uint32_t i = sectorStart; i < sectorStart + 0x1000 && i < saveData.size(); i++)
+                saveData[i] = 0xFF;
+            dbg << "[FLASH_ERASE_SECTOR] sectorStart=0x" << std::hex << sectorStart
+                << " bank=" << (int)flashBank << "\n";
+            dbg.flush();
+            flashErasePending = true;
+            flashEraseSectorStart = sectorStart;
+            flashErasePollCount = 0;
+        }
+        else if (shortAddr == 0x5555) {
+            flashEraseArmed = false;
+            switch (value) {
+            case 0x90:
+                flashIdMode = true;
+                dbg << "[FLASH_ID_MODE_SET] this=0x" << std::hex << (uintptr_t)this << "\n";
+                dbg.flush();
+                break;
+            case 0xF0: flashIdMode = false; break;
+            case 0xA0: flashState = FLASH_WRITE; break;
+            case 0x80: flashState = FLASH_ERASE_CMD; break;
+            case 0xB0: flashState = FLASH_BANK; break;
+            }
+        }
+        break;
+
+    case FLASH_WRITE:
+        if (offset < saveData.size())
+            saveData[offset] = value;
+        flashWritePending = true;
+        flashWriteAddr = offset;
+        flashWriteVal = value;
+        flashState = FLASH_READ;
+        break;
+
+
+    case FLASH_BANK:
+        flashBank = value & 1;
+        flashState = FLASH_READ;
+        break;
+
+    default:
+        flashState = FLASH_READ;
+        break;
+    }
 }

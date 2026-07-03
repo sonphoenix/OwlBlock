@@ -19,6 +19,8 @@ struct Bus {
     CPU* cpuptr = nullptr;
     PPU* ppuptr = nullptr;
     APU* apuptr = nullptr;
+    //memory data register 
+    uint32_t mdr = 0;
 
     DMAchannel dma[4];
     uint32_t bios_latch = 0;
@@ -66,9 +68,33 @@ struct Bus {
     int eepromReadBit = 0;
     bool eepromWriteDone = false;
 
+
     uint8_t readEEPROM();
     void writeEEPROM(uint8_t bit);
     void detectEEPROMSize();
+
+    enum FlashState {
+        FLASH_READ,
+        FLASH_CMD1,
+        FLASH_CMD2,
+        FLASH_ID,
+        FLASH_WRITE,
+        FLASH_ERASE_CMD,
+        FLASH_BANK
+    };
+    FlashState flashState = FLASH_READ;
+    uint8_t flashBank = 0;
+    bool flashIdMode = false;
+    bool flashWritePending = false;
+    uint32_t flashWriteAddr = 0;
+    uint8_t flashWriteVal = 0;
+    bool flashErasePending = false;
+    uint32_t flashEraseSectorStart = 0;
+    int flashErasePollCount = 0;
+    bool flashEraseArmed = false;
+    void writeFlash(uint32_t address, uint8_t value);
+    uint8_t readFlash(uint32_t address);
+
     Bus();
     uint8_t  read8(uint32_t address);
     uint16_t read16(uint32_t address);
