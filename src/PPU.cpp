@@ -22,7 +22,20 @@ inline uint32_t gba15ToRGBA32(uint16_t col16) {
 // applies REG_BLDCNT blend mode, writes final RGBA to frameBuffer.
 // ---------------------------------------------------------------------------
 void PPU::composeScanLine(uint8_t scanline) {
+    static int frameCount = 0;
+    if (scanline == 0) frameCount++;
 
+    if (frameCount == 300 && scanline == 80) {
+        for (int i = 0; i < 0x4000; i++) {
+            uint8_t val = bus.read8(0x0600C000 + i);
+            if (val != 0) {
+                dbg << "[CB3_FIRST_NONZERO] offset=0x" << std::hex << i
+                    << " val=0x" << (int)val << "\n";
+                dbg.flush();
+                break;
+            }
+        }
+    }
     uint16_t bldcnt = bus.read16(0x04000050);
     uint16_t bldalpha = bus.read16(0x04000052);
     uint16_t bldyReg = bus.read16(0x04000054);
@@ -232,146 +245,7 @@ void PPU::renderMode0(uint8_t scanline) {
 // ---------------------------------------------------------------------------
 // renderMode1 — BG0/BG1 tiled + BG2 affine
 // ---------------------------------------------------------------------------
-void PPU::renderMode1(uint8_t scanline) {
-    uint16_t dispcnt = bus.read16(REG_DISPCNT);
 
-    struct BGInfo { int index; uint8_t priority; };
-    BGInfo bgs[3];
-    int bgCount = 0;
-
-    for (int i = 0; i < 2; i++) {
-        if (!(dispcnt & (1 << (i + 8)))) continue;
-        uint16_t bgcnt = bus.read16(0x04000008 + i * 2);
-        bgs[bgCount++] = { i, (uint8_t)(bgcnt & 0x3) };
-    }
-    if (dispcnt & (1 << 10)) {
-        uint16_t bgcnt = bus.read16(0x0400000C);
-        bgs[bgCount++] = { 2, (uint8_t)(bgcnt & 0x3) };
-    }
-
-    for (int a = 0; a < bgCount - 1; a++)
-        for (int b = a + 1; b < bgCount; b++)
-            if (bgs[a].priority < bgs[b].priority ||
-                (bgs[a].priority == bgs[b].priority && bgs[a].index < bgs[b].index))
-                std::swap(bgs[a], bgs[b]);
-
-    int16_t  PA = 0, PB = 0, PC = 0, PD = 0;
-    int32_t  startX = 0, startY = 0;
-    uint8_t  bg2CharBlock = 0, bg2ScreenBlock = 0, bg2ScreenSize = 0;
-    bool     bg2Overflow = false;
-    uint16_t bg2MapSize = 0;
-
-    if (dispcnt & (1 << 10)) {
-        uint16_t bgcnt = bus.read16(0x0400000C);
-        bg2CharBlock = (bgcnt >> 2) & 0x3;
-        bg2ScreenBlock = (bgcnt >> 8) & 0x1F;
-        bg2ScreenSize = (bgcnt >> 14) & 0x3;
-        bg2Overflow = (bgcnt >> 13) & 0x1;
-        static const uint16_t mapSizes[4] = { 128, 256, 512, 1024 };
-        bg2MapSize = mapSizes[bg2ScreenSize];
-
-        PA = (int16_t)bus.read16(0x04000020);
-        PB = (int16_t)bus.read16(0x04000022);
-        PC = (int16_t)bus.read16(0x04000024);
-        PD = (int16_t)bus.read16(0x04000026);
-
-        int32_t refX = (int32_t)bus.read32(0x04000028);
-        int32_t refY = (int32_t)bus.read32(0x0400002C);
-        if (refX & 0x08000000) refX |= 0xF0000000; else refX &= 0x0FFFFFFF;
-        if (refY & 0x08000000) refY |= 0xF0000000; else refY &= 0x0FFFFFFF;
-        startX = refX + (int32_t)PB * scanline;
-        startY = refY + (int32_t)PD * scanline;
-    }
-
-    for (int bi = 0; bi < bgCount; bi++) {
-        int i = bgs[bi].index;
-
-        if (i == 2) {
-            uint32_t tileDataBase = MEM_VRAM + bg2CharBlock * 0x4000;
-            uint32_t mapBase = MEM_VRAM + bg2ScreenBlock * 0x800;
-
-            for (int x = 0; x < 240; x++) {
-                int32_t bgX = (startX + (int32_t)PA * x) >> 8;
-                int32_t bgY = (startY + (int32_t)PC * x) >> 8;
-
-                if (bg2Overflow) {
-                    bgX = ((bgX % bg2MapSize) + bg2MapSize) % bg2MapSize;
-                    bgY = ((bgY % bg2MapSize) + bg2MapSize) % bg2MapSize;
-                }
-                else {
-                    if (bgX < 0 || bgX >= bg2MapSize || bgY < 0 || bgY >= bg2MapSize)
-                        continue;
-                }
-
-                uint16_t tileX = bgX / 8, tileY = bgY / 8;
-                uint8_t  pixX = bgX % 8, pixY = bgY % 8;
-
-                uint8_t tileIndex = bus.read8(mapBase + tileY * (bg2MapSize / 8) + tileX);
-                uint8_t palIdx = bus.read8(tileDataBase + tileIndex * 64 + pixY * 8 + pixX);
-                if (palIdx == 0) continue;
-
-                bgLineBuffer[2][x] = bus.read16(MEM_PRAM + palIdx * 2) & 0x7FFF;
-            }
-        }
-        else {
-            uint16_t bgcnt = bus.read16(0x04000008 + i * 2);
-            uint8_t  charBlock = (bgcnt >> 2) & 0x3;
-            uint8_t  colorMode = (bgcnt >> 7) & 0x1;
-            uint8_t  screenBlock = (bgcnt >> 8) & 0x1F;
-            uint8_t  screenSize = (bgcnt >> 14) & 0x3;
-
-            uint32_t tileDataBase = MEM_VRAM + charBlock * 0x4000;
-            uint16_t scrollX = bus.read16(0x04000010 + i * 4) & 0x1FF;
-            uint16_t scrollY = bus.read16(0x04000012 + i * 4) & 0x1FF;
-            uint16_t mapWidth = (screenSize & 1) ? 512 : 256;
-            uint16_t mapHeight = (screenSize & 2) ? 512 : 256;
-            uint16_t effectiveY = (scrollY + scanline) & (mapHeight - 1);
-            uint8_t  tileRow = (effectiveY / 8) & 31;
-            uint8_t  pixelRow = effectiveY % 8;
-
-            for (int x = 0; x < 240; x++) {
-                uint16_t effectiveX = (scrollX + x) & (mapWidth - 1);
-                uint8_t  tileCol = (effectiveX / 8) & 31;
-                uint8_t  pixelCol = effectiveX % 8;
-                uint8_t  blockX = effectiveX >= 256 ? 1 : 0;
-                uint8_t  blockY = effectiveY >= 256 ? 1 : 0;
-
-                uint8_t subBlock = screenBlock;
-                if (screenSize == 1) subBlock += blockX;
-                else if (screenSize == 2) subBlock += blockY;
-                else if (screenSize == 3) subBlock += blockX + blockY * 2;
-
-                uint32_t mapBase = MEM_VRAM + subBlock * 0x800;
-                uint32_t mapAddr = mapBase + (tileRow * 32 + tileCol) * 2;
-                uint16_t mapEntry = bus.read16(mapAddr);
-
-                uint16_t tileIndex = mapEntry & 0x3FF;
-                bool     flipH = (mapEntry >> 10) & 0x1;
-                bool     flipV = (mapEntry >> 11) & 0x1;
-                uint8_t  palette = (mapEntry >> 12) & 0xF;
-                uint8_t  col = flipH ? (7 - pixelCol) : pixelCol;
-                uint8_t  row = flipV ? (7 - pixelRow) : pixelRow;
-
-                uint16_t color;
-                if (colorMode == 0) {
-                    uint32_t tileAddr = tileDataBase + tileIndex * 32 + row * 4 + col / 2;
-                    uint8_t  nibbles = bus.read8(tileAddr);
-                    uint8_t  palIndex = (col & 1) ? (nibbles >> 4) : (nibbles & 0xF);
-                    if (palIndex == 0) continue;
-                    color = bus.read16(MEM_PRAM + palette * 32 + palIndex * 2);
-                }
-                else {
-                    uint32_t tileAddr = tileDataBase + tileIndex * 64 + row * 8 + col;
-                    uint8_t  palIndex = bus.read8(tileAddr);
-                    if (palIndex == 0) continue;
-                    color = bus.read16(MEM_PRAM + palIndex * 2);
-                }
-
-                bgLineBuffer[i][x] = color & 0x7FFF;
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // renderMode2 — BG2/BG3 affine
