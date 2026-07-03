@@ -14,7 +14,6 @@ int main() {
     Bus bus;
     CPU cpu(bus);
     dbg << "[AFTER_CONSTRUCT] PC=0x" << std::hex << cpu.reg[15] << "\n";
-
     PPU ppu(bus);
     APU apu(bus);
     DebugView dbgView(bus, cpu);
@@ -22,7 +21,7 @@ int main() {
     bus.ppuptr = &ppu;
     bus.apuptr = &apu;
     bus.loadBIOS("bios/gba_bios.bin");
-    bus.loadROM("roms/anj.gba");
+    bus.loadROM("roms/Hajime no Ippo - The Fighting English.gba");
     dbg << "[LOOP_BYTES] ";
     for (uint32_t a = 0x800f19c; a <= 0x800f1a4; a += 2) {
         uint16_t instr = bus.read16(a);
@@ -35,7 +34,7 @@ int main() {
     dbg.flush();
     InitWindow(240 * 3 + 810, 600, "gba emulator + debugger");
     apu.init();
-    SetTargetFPS(60);
+    //SetTargetFPS(60);
     Image img = GenImageColor(240, 160, BLACK);
     Texture2D texture = LoadTextureFromImage(img);
     UnloadImage(img);
@@ -161,6 +160,38 @@ int main() {
         if (IsKeyDown(KEY_DOWN))      keys &= ~(1 << 7);
         if (IsKeyDown(KEY_S))         keys &= ~(1 << 8);
         if (IsKeyDown(KEY_A))         keys &= ~(1 << 9);
+
+        // --- Gamepad (new) ---
+        const int GAMEPAD_ID = 0;
+        if (IsGamepadAvailable(GAMEPAD_ID)) {
+            // Face buttons -> A / B
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))  keys &= ~(1 << 0); // A
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) keys &= ~(1 << 1); // B
+
+            // Select / Start
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_LEFT))  keys &= ~(1 << 2); // Select
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_RIGHT)) keys &= ~(1 << 3); // Start
+
+            // D-pad
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) keys &= ~(1 << 4); // Right
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  keys &= ~(1 << 5); // Left
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_UP))    keys &= ~(1 << 6); // Up
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_DOWN))  keys &= ~(1 << 7); // Down
+
+            // L / R shoulder buttons
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_TRIGGER_1))  keys &= ~(1 << 8); // L
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) keys &= ~(1 << 9); // R
+
+            // Optional: left analog stick as an alternative D-pad, with deadzone
+            const float DEADZONE = 0.4f;
+            float axisX = GetGamepadAxisMovement(GAMEPAD_ID, GAMEPAD_AXIS_LEFT_X);
+            float axisY = GetGamepadAxisMovement(GAMEPAD_ID, GAMEPAD_AXIS_LEFT_Y);
+            if (axisX > DEADZONE) keys &= ~(1 << 4); // Right
+            if (axisX < -DEADZONE) keys &= ~(1 << 5); // Left
+            if (axisY > DEADZONE) keys &= ~(1 << 7); // Down
+            if (axisY < -DEADZONE) keys &= ~(1 << 6); // Up
+        }
+
         bus.io[0x130] = keys & 0xFF;
         bus.io[0x131] = (keys >> 8) & 0xFF;
         if (!paused) {

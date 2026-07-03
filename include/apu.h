@@ -15,9 +15,9 @@ public:
     void shutdown();
     void tick(int cycles);
     void writeRegister(uint32_t ioOffset, uint8_t val);
-    void writeRegister(uint32_t ioOffset, uint32_t val);  // FIFO overload
+    void writeRegister(uint32_t ioOffset, uint32_t val);
     void onTimerOverflow(int timerIndex);
-    void onFIFORefill(int fifoIndex);  // 0=A, 1=B
+    void onFIFORefill(int fifoIndex);
 
 private:
     Bus& bus;
@@ -86,6 +86,9 @@ private:
         uint16_t lfsr = 0x7FFF;
         bool     shortMode = false;
         int      timer = 0;
+        int      period = 0;
+        int      clockShift = 0;
+        uint8_t  divisorCode = 0;
         bool     enabled = false;
         int      lengthTimer = 0;
         bool     lengthEnabled = false;
@@ -103,8 +106,7 @@ private:
         bool    leftEnable = false;
         bool    rightEnable = false;
         bool    doubleVolume = false;
-        bool timerSelect = false;  // false=timer0, true=timer1
-
+        bool    timerSelect = false;
         void    push(uint32_t word);
         void    pop();
         bool    needsRefill() const { return count <= 16; }
@@ -112,20 +114,16 @@ private:
         void    reset();
     } fifoA, fifoB;
 
-    // frame sequencer
     int frameSeqTimer = 0;
     int frameSeqStep = 0;
 
-    // master control
     bool    apuEnabled = false;
     uint8_t nr50 = 0;
     uint8_t nr51 = 0;
 
-    // raylib stream
     AudioStream stream;
     static void audioCallback(void* buffer, unsigned int frames);
 
-    // sample timing
     int sampleTimer = 0;
     int cyclesPerSample = 0;
 
@@ -133,7 +131,6 @@ private:
     static constexpr int CPU_FREQ = 16777216;
     static constexpr int RING_SIZE = 4096;
 
-    // ring buffer — vectors
     std::vector<int16_t> ringL = std::vector<int16_t>(RING_SIZE, 0);
     std::vector<int16_t> ringR = std::vector<int16_t>(RING_SIZE, 0);
     int ringWrite = 0;
