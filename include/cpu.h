@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cmath>
 #include "bus.h"
 
 const uint8_t MODE_USER = 0b10000;

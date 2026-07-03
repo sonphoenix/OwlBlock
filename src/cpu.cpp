@@ -1,5 +1,7 @@
-﻿#include"cpu.h"
-#include"gba_registers.h"
+﻿#define _USE_MATH_DEFINES
+#include <cmath>
+#include "cpu.h"
+#include "gba_registers.h"
 #include <iomanip>
 
 #if GBA_DEBUG
@@ -200,7 +202,7 @@ int CPU::Step() {
     static uint32_t stepCounter = 0;
     stepCounter++;
 
-    /*dbg << "[STEP " << std::dec << stepCounter << "] PC=0x" << std::hex << reg[15]
+   /* dbg << "[STEP " << std::dec << stepCounter << "] PC=0x" << std::hex << reg[15]
         << " mode=0x" << (cpsr & 0x1F)
         << " T=" << ((cpsr >> 5) & 1)
         << " I=" << ((cpsr >> 7) & 1)
@@ -235,6 +237,7 @@ int CPU::Step() {
     }
 
     uint32_t prev_pc = reg[15];
+
     /*if (prev_pc == 0x128) {
         dbg << "[AT_128] R0=0x" << std::hex << reg[0] << "\n";
         dbg.flush();
@@ -252,6 +255,15 @@ int CPU::Step() {
             << " mode=0x" << (cpsr & 0x1F) << "\n";
         dbg.flush();
     }*/
+    static uint32_t entry_last_pc = 0xFFFFFFFF;
+    if (prev_pc == 0x168 || prev_pc == 0x16C || prev_pc == 0x170) {
+        dbg << "[BIOS_PRE_DIV] PC=0x" << std::hex << prev_pc
+            << " R0=0x" << reg[0]
+            << " R1=0x" << reg[1]
+            << " LR=0x" << reg[14] << "\n";
+        dbg.flush();
+    }
+    entry_last_pc = prev_pc;
     if (cpsr & (1 << 5)) {
         uint16_t instr = bus.read16(prev_pc);
         if (prev_pc < 0x4000)
@@ -944,8 +956,139 @@ void CPU::executePSRTransfer(uint32_t instruction) {
 
 
 void CPU::executeSWI(uint32_t instruction) {
-    dbg << "swisaar \n";dbg.flush();
     bool thumb = (cpsr >> 5) & 1;
+    uint8_t swiNum = (instruction >> (thumb ? 0 : 16)) & 0xFF;
+
+    dbg << "[SWI] num=0x" << std::hex << (int)swiNum
+        << " PC=0x" << reg[15] << "\n";
+    dbg.flush();
+
+    dbg << "[SWI_RAW] instr=0x" << std::hex << instruction
+        << " thumb=" << thumb << " PC=0x" << reg[15] << "\n";
+    dbg.flush();
+
+    if (swiNum == 0x06) {
+        if (reg[1] == 0) {
+            dbg << "[DIV_BY_ZERO] R0=0x" << std::hex << reg[0]
+                << " PC=0x" << reg[15] << "\n";
+            dbg.flush();
+            reg[3] = reg[0];
+        }
+        else {
+            int32_t dividend = (int32_t)reg[0];
+            int32_t divisor = (int32_t)reg[1];
+            int32_t result = dividend / divisor;
+            int32_t remainder = dividend % divisor;
+            reg[0] = (uint32_t)result;
+            reg[1] = (uint32_t)remainder;
+            reg[3] = (uint32_t)(result < 0 ? -result : result);
+            dbg << "[DIV] R0=" << std::dec << dividend
+                << " R1=" << divisor
+                << " result=" << result << "\n";
+            dbg.flush();
+        }
+        return;
+    }
+
+    if (swiNum == 0x07) { // DivArm — args swapped vs Div
+        if (reg[0] == 0) {
+            reg[3] = reg[1];
+        }
+        else {
+            int32_t dividend = (int32_t)reg[1];
+            int32_t divisor = (int32_t)reg[0];
+            int32_t result = dividend / divisor;
+            int32_t remainder = dividend % divisor;
+            reg[0] = (uint32_t)result;
+            reg[1] = (uint32_t)remainder;
+            reg[3] = (uint32_t)(result < 0 ? -result : result);
+        }
+        return;
+    }
+
+    if (swiNum == 0x08) { // Sqrt
+        uint32_t val = reg[0];
+        reg[0] = (uint32_t)sqrtf((float)val);
+        return;
+    }
+
+    if (swiNum == 0x09) { // ArcTan
+        int16_t tan = (int16_t)reg[0];
+        float angle = atanf(tan / 16384.0f) / (float)(M_PI / 2.0) * 16384.0f;
+        reg[0] = (uint32_t)(int32_t)(int16_t)angle;
+        return;
+    }
+
+    if (swiNum == 0x0A) { // ArcTan2
+        int16_t x = (int16_t)reg[0];
+        int16_t y = (int16_t)reg[1];
+        float angle = atan2f((float)y, (float)x) / (float)M_PI * 32768.0f;
+        reg[0] = (uint32_t)(int32_t)(int16_t)angle;
+        return;
+    }
+
+    if (swiNum == 0x0B) {
+        uint32_t src = reg[0];
+        uint32_t dst = reg[1];
+        uint32_t cnt = reg[2];
+        uint32_t count = cnt & 0x1FFFFF;
+        bool     fill = (cnt >> 24) & 1;
+        bool     word = (cnt >> 26) & 1;
+        uint32_t unitSize = word ? 4 : 2;
+        dbg << "[CPUSET] src=0x" << std::hex << src
+            << " dst=0x" << dst
+            << " count=" << std::dec << count
+            << " fill=" << fill
+            << " word=" << word << "\n";
+        dbg.flush();
+        if (fill) {
+            uint32_t fillVal = word ? bus.read32(src) : bus.read16(src);
+            for (uint32_t i = 0; i < count; i++) {
+                if (word) bus.write32(dst, fillVal);
+                else      bus.write16(dst, (uint16_t)fillVal);
+                dst += unitSize;
+            }
+        }
+        else {
+            for (uint32_t i = 0; i < count; i++) {
+                if (word) bus.write32(dst, bus.read32(src));
+                else      bus.write16(dst, bus.read16(src));
+                src += unitSize;
+                dst += unitSize;
+            }
+        }
+        return;
+    }
+
+    if (swiNum == 0x0C) {
+        uint32_t src = reg[0];
+        uint32_t dst = reg[1];
+        uint32_t cnt = reg[2];
+        uint32_t count = (cnt & 0x1FFFFF);
+        bool     fill = (cnt >> 24) & 1;
+        count = (count + 7) & ~7;
+        dbg << "[CPUFASTSET] src=0x" << std::hex << src
+            << " dst=0x" << dst
+            << " count=" << std::dec << count
+            << " fill=" << fill << "\n";
+        dbg.flush();
+        if (fill) {
+            uint32_t fillVal = bus.read32(src);
+            for (uint32_t i = 0; i < count; i++) {
+                bus.write32(dst, fillVal);
+                dst += 4;
+            }
+        }
+        else {
+            for (uint32_t i = 0; i < count; i++) {
+                bus.write32(dst, bus.read32(src));
+                src += 4;
+                dst += 4;
+            }
+        }
+        return;
+    }
+
     uint32_t returnAddr = thumb ? reg[15] : reg[15] - 4;
     uint32_t oldCPSR = cpsr;
     spsr_svc = oldCPSR;
@@ -956,8 +1099,7 @@ void CPU::executeSWI(uint32_t instruction) {
 }
 
 void CPU::triggerIRQ() {
-    dbg << "[TRIGGER_IRQ_PC] reg15=0x" << std::hex << reg[15] << "\n";
-    dbg.flush();
+    dbg << "[IRQ_FIRED] IF=0x" << std::hex << (bus.io[0x202] | (bus.io[0x203] << 8)) << "\n";    dbg.flush();
     if ((cpsr & 0x1F) == 0x12) return;
     if (cpsr & (1 << 7)) {
         return;
@@ -1000,6 +1142,7 @@ void CPU::triggerIRQ() {
         << " CPSR=0x" << cpsr << "\n";
     dbg.flush();
 }
+
 void CPU::triggerFIQ() {
     dbg << "[FIQ_TRIGGER] PC=0x" << std::hex << reg[15]
         << " CPSR=0x" << cpsr << "\n";
