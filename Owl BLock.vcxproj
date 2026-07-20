@@ -147,26 +147,30 @@
     <None Include="roms\thumb.gba" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\apu.cpp" />
-    <ClCompile Include="src\bus.cpp" />
-    <ClCompile Include="src\cpu.cpp" />
-    <ClCompile Include="src\DebugView.cpp" />
+    <ClCompile Include="src\audio\apu.cpp" />
+    <ClCompile Include="src\core\bus.cpp" />
+    <ClCompile Include="src\core\cpu.cpp" />
+    <ClCompile Include="src\debug\DebugView.cpp" />
     <ClCompile Include="src\main.cpp" />
-    <ClCompile Include="src\PPU.cpp" />
+    <ClCompile Include="src\save\saveController.cpp" />
+    <ClCompile Include="src\timer\timerController.cpp" />
+    <ClCompile Include="src\video\PPU.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\apu.h" />
-    <ClInclude Include="include\bus.h" />
-    <ClInclude Include="include\cpu.h" />
-    <ClInclude Include="include\DebugView.h" />
-    <ClInclude Include="include\Disassembler.h" />
-    <ClInclude Include="include\gba_registers.h" />
-    <ClInclude Include="include\nlohmann\adl_serializer.hpp" />
-    <ClInclude Include="include\nlohmann\json.hpp" />
-    <ClInclude Include="include\PPU.h" />
-    <ClInclude Include="include\raylib.h" />
-    <ClInclude Include="include\raymath.h" />
-    <ClInclude Include="include\rlgl.h" />
+    <ClInclude Include="include\audio\apu.h" />
+    <ClInclude Include="include\core\bus.h" />
+    <ClInclude Include="include\core\cpu.h" />
+    <ClInclude Include="include\debug\DebugView.h" />
+    <ClInclude Include="include\debug\Disassembler.h" />
+    <ClInclude Include="include\common\gba_registers.h" />
+    <ClInclude Include="include\save\saveController.h" />
+    <ClInclude Include="include\timer\timerController.h" />
+    <ClInclude Include="include\vendor\nlohmann\adl_serializer.hpp" />
+    <ClInclude Include="include\vendor\nlohmann\json.hpp" />
+    <ClInclude Include="include\video\PPU.h" />
+    <ClInclude Include="include\vendor\raylib.h" />
+    <ClInclude Include="include\vendor\raymath.h" />
+    <ClInclude Include="include\vendor\rlgl.h" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="lib\raylib.lib" />

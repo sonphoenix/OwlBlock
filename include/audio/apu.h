@@ -2,8 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
-#include "../include/raylib.h"
-
+#include "vendor/raylib.h"
 struct Bus;
 
 class APU {

@@ -1,6 +1,6 @@
-﻿#include "PPU.h"
-#include "bus.h"
-#include "gba_registers.h"
+﻿#include "video/PPU.h"
+#include "core/bus.h"
+#include "common/gba_registers.h"
 #include <algorithm>
 extern std::ofstream dbg;
 

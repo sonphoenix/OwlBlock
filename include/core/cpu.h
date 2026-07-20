@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cmath>
-#include "bus.h"
+#include "core/bus.h"
 
 const uint8_t MODE_USER = 0b10000;
 const uint8_t MODE_FIQ = 0b10001;

@@ -1,7 +1,7 @@
 ﻿#define _USE_MATH_DEFINES
 #include <cmath>
-#include "cpu.h"
-#include "gba_registers.h"
+#include "core/cpu.h"
+#include "common/gba_registers.h"
 #include <iomanip>
 
 #if GBA_DEBUG

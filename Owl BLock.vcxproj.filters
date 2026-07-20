@@ -29,60 +29,72 @@
     <None Include="roms\thumb.gba" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\PPU.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\bus.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\cpu.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\DebugView.cpp">
+    <ClCompile Include="src\audio\apu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\apu.cpp">
+    <ClCompile Include="src\core\bus.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\cpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\DebugView.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\video\PPU.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\save\saveController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\timer\timerController.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\PPU.h">
+    <ClInclude Include="include\audio\apu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\bus.h">
+    <ClInclude Include="include\core\bus.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\cpu.h">
+    <ClInclude Include="include\core\cpu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\gba_registers.h">
+    <ClInclude Include="include\debug\DebugView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\raylib.h">
+    <ClInclude Include="include\debug\Disassembler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\raymath.h">
+    <ClInclude Include="include\common\gba_registers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\rlgl.h">
+    <ClInclude Include="include\vendor\nlohmann\adl_serializer.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\DebugView.h">
+    <ClInclude Include="include\vendor\nlohmann\json.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\nlohmann\json.hpp">
+    <ClInclude Include="include\video\PPU.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\nlohmann\adl_serializer.hpp">
+    <ClInclude Include="include\vendor\raylib.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\apu.h">
+    <ClInclude Include="include\vendor\raymath.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\Disassembler.h">
+    <ClInclude Include="include\vendor\rlgl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\save\saveController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\timer\timerController.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

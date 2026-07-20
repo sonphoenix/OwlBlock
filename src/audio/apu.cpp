@@ -1,5 +1,5 @@
-﻿#include "APU.h"
-#include "../include/bus.h"
+﻿#include "audio/apu.h"
+#include "core/bus.h"
 #include <algorithm>
 extern std::ofstream dbg;
 

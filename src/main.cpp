@@ -1,13 +1,13 @@
-﻿#include "../include/raylib.h"
-#include <fstream>
+﻿#include <fstream>
 #include <cstring>
 #include <cctype>
 #include <cstdio>
-#include "../include/cpu.h"
-#include "../include/bus.h"
-#include "../include/PPU.h"
-#include "../include/apu.h"
-#include "../include/DebugView.h"
+#include "vendor/raylib.h"
+#include "core/cpu.h"
+#include "core/bus.h"
+#include "video/PPU.h"
+#include "audio/apu.h"
+#include "debug/DebugView.h"
 
 std::ofstream dbg("debug.txt");
 int main() {
@@ -21,7 +21,7 @@ int main() {
     bus.ppuptr = &ppu;
     bus.apuptr = &apu;
     bus.loadBIOS("bios/gba_bios.bin");
-    bus.loadROM("roms/Hajime no Ippo - The Fighting English.gba");
+    bus.loadROM("roms/Super Mario Advance 4 - Super Mario Bros. 3 (USA, Australia) (Rev 1).gba");
     dbg << "[LOOP_BYTES] ";
     for (uint32_t a = 0x800f19c; a <= 0x800f1a4; a += 2) {
         uint16_t instr = bus.read16(a);
@@ -34,7 +34,7 @@ int main() {
     dbg.flush();
     InitWindow(240 * 3 + 810, 600, "gba emulator + debugger");
     apu.init();
-    //SetTargetFPS(60);
+    SetTargetFPS(60);
     Image img = GenImageColor(240, 160, BLACK);
     Texture2D texture = LoadTextureFromImage(img);
     UnloadImage(img);
@@ -235,7 +235,7 @@ int main() {
         }
         EndDrawing();
     }
-    bus.saveToDisk("game.sav");
+    bus.save.saveToDisk("game.sav");
     UnloadTexture(texture);
     CloseWindow();
     return 0;

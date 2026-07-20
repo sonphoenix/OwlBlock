@@ -1,7 +1,7 @@
 #pragma once
-#include "../include/raylib.h"
-#include "../include/bus.h"
-#include "../include/cpu.h"
+#include "vendor/raylib.h"
+#include "core/bus.h"
+#include "core/cpu.h"
 #include <cstdint>
 #include <deque>
 class DebugView {

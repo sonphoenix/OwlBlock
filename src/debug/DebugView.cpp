@@ -1,6 +1,6 @@
 ﻿// DebugView.cpp
-#include "DebugView.h"
-#include "Disassembler.h"
+#include "debug/DebugView.h"
+#include "debug/Disassembler.h"
 #include <cstdio>
 #include <cstring>
 #include <cctype>

@@ -1,7 +1,7 @@
 #pragma once
 #include<cstdint>
 #include<vector>
-#include <bus.h>
+#include <core/bus.h>
 
 struct Bus;
 

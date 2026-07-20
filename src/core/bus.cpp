@@ -1,8 +1,8 @@
-﻿#include "bus.h"
-#include "cpu.h"
-#include "PPU.h"
-#include "apu.h"
-#include "gba_registers.h"
+﻿#include "core/bus.h"
+#include "core/cpu.h"
+#include "video/PPU.h"
+#include "audio/apu.h"
+#include "common/gba_registers.h"
 #include <algorithm> 
 #include <cstring>
 extern std::ofstream dbg;
@@ -76,168 +76,16 @@ static inline bool isOpenBusRegion(uint32_t address) {
     if (address >= 0x08000000 && address < 0x0E000000) return false;   // ROM
     return true; // everything else (including 0x10000000+) = truly unmapped -> open bus
 }
-void Bus::detectEEPROMSize() {
-
-    uint32_t romSize = 0;
-    for (int i = (int)rom.size() - 1; i >= 0; i--) {
-        if (rom[i] != 0) { romSize = (uint32_t)i + 1; break; }
-    }
-    eepromLargeAddress = (romSize >= 0x1000000);
-    dbg << "[EEPROM_SIZE] romSize=0x" << std::hex << romSize
-        << " eepromLargeAddress=" << eepromLargeAddress << "\n";
-    dbg.flush();
-}
-
-
-
-void Bus::writeEEPROM(uint8_t bit) {
-    switch (eepromState) {
-    case EEPROM_IDLE:
-        eepromBuffer = bit;
-        eepromBitsLeft = 1;
-        eepromState = EEPROM_REQUEST;
-        eepromWriteDone = false;
-        break;
-
-    case EEPROM_REQUEST:
-        eepromBuffer = (eepromBuffer << 1) | bit;
-        eepromBitsLeft++;
-        if (eepromBitsLeft == 2) {
-            eepromRequestType = eepromBuffer & 0x3;
-            eepromAddress = 0;
-            eepromBitsLeft = eepromLargeAddress ? 14 : 6;
-            eepromState = EEPROM_ADDRESS;
-        }
-        break;
-
-    case EEPROM_ADDRESS:
-        eepromAddress = (eepromAddress << 1) | bit;
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0) {
-            if (eepromRequestType == 0x3) {
-                eepromState = EEPROM_READ_DUMMY;
-                eepromBitsLeft = 5;  // 4 dummy + 1 to absorb stop bit from write DMA
-                uint32_t offset = eepromAddress * 8;
-                for (int i = 0; i < 8; i++)
-                    eepromReadBuffer[i] = (offset + i < (int)saveData.size())
-                    ? saveData[offset + i] : 0xFF;
-                eepromReadBit = 0;
-                /*dbg << "[EEPROM_READ_SETUP] address=0x" << std::hex << eepromAddress
-                    << " saveData[0]=0x" << (int)saveData[offset]
-                    << " saveData[1]=0x" << (int)saveData[offset + 1]
-                    << " saveData[2]=0x" << (int)saveData[offset + 2]
-                    << " saveData[3]=0x" << (int)saveData[offset + 3] << "\n";
-                dbg << "[EEPROM_TXN] READ requestType=0x" << std::hex << (int)eepromRequestType
-                    << " address=0x" << eepromAddress
-                    << " byteOffset=0x" << offset << "\n";
-                dbg.flush();*/
-            }
-            else {
-                eepromState = EEPROM_WRITE_DATA;
-                eepromBitsLeft = 64;
-                eepromBuffer = 0;
-                /*dbg << "[EEPROM_TXN] WRITE_START requestType=0x" << std::hex << (int)eepromRequestType
-                    << " address=0x" << eepromAddress << "\n";
-                dbg.flush();*/
-            }
-        }
-        break;
-
-    case EEPROM_WRITE_DATA:
-        eepromBuffer = (eepromBuffer << 1) | bit;
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0) {
-            uint32_t offset = eepromAddress * 8;
-            for (int i = 0; i < 8; i++) {
-                uint8_t byte = (eepromBuffer >> (56 - i * 8)) & 0xFF;
-                if (offset + i < saveData.size())
-                    saveData[offset + i] = byte;
-            }
-           /* dbg << "[EEPROM_TXN] WRITE_COMPLETE address=0x" << std::hex << eepromAddress
-                << " data=0x" << eepromBuffer << "\n";
-            dbg << "[EEPROM_VERIFY] saveData[0]=0x" << (int)saveData[0]
-                << " saveData[1]=0x" << (int)saveData[1]
-                << " offset=" << std::dec << offset
-                << " saveData.size()=" << saveData.size() << "\n";
-            dbg.flush();*/
-            eepromWriteDone = true;
-            eepromState = EEPROM_WRITE_STOP;
-            eepromBitsLeft = 1;
-        }
-        break;
-
-    case EEPROM_WRITE_STOP:
-        eepromState = EEPROM_IDLE;
-        break;
-
-    case EEPROM_READ_DUMMY:
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0) {
-            eepromState = EEPROM_READ_DATA;
-            eepromBitsLeft = 64;
-        }
-        break;
-
-    case EEPROM_READ_DATA:
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0)
-            eepromState = EEPROM_IDLE;
-        break;
-
-    default:
-        break;
-    }
-}
-
-
-
-
-uint8_t Bus::readEEPROM() {
-    dbg << "[EEPROM_READ] state=" << (int)eepromState
-        << " PC=0x" << std::hex << cpuptr->reg[15] << "\n";
-    dbg.flush();
-
-    switch (eepromState) {
-    case EEPROM_READ_DUMMY:
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0) {
-            eepromState = EEPROM_READ_DATA;
-            eepromBitsLeft = 64;
-        }
-        return 0;
-
-    case EEPROM_READ_DATA: {
-        int bitIndex = 63 - (eepromBitsLeft - 1);
-        int byteIndex = bitIndex / 8;
-        int bitPos = 7 - (bitIndex % 8);
-        uint8_t bit = (eepromReadBuffer[byteIndex] >> bitPos) & 1;
-        eepromBitsLeft--;
-        if (eepromBitsLeft == 0) {
-            eepromState = EEPROM_IDLE;
-            uint64_t dataOut = 0;
-            for (int i = 0; i < 8; i++) dataOut = (dataOut << 8) | eepromReadBuffer[i];
-            dbg << "[EEPROM_TXN] READ_COMPLETE address=0x" << std::hex << eepromAddress
-                << " data=0x" << dataOut << "\n";
-            dbg.flush();
-        }
-        return bit;
-    }
-
-    default:
-        return 1;  // EEPROM ready / not in a read transaction
-    }
-}
-
 
 
 uint8_t Bus::read8(uint32_t address) {
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read addr=0x" << std::hex << address
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            return readEEPROM();
+        if (save.saveType == save.SAVE_EEPROM)
+            return save.readEEPROM();
         return 0xFF;
     }
 
@@ -276,11 +124,11 @@ uint8_t Bus::read8(uint32_t address) {
     }
     else if (address >= 0x0E000000 && address <= 0x0FFFFFFF) {
         if (address >= 0x0F000000) return (mdr >> ((address & 3) * 8)) & 0xFF;
-        if (saveType == SAVE_FLASH64 || saveType == SAVE_FLASH128)
-            return readFlash(address);
-        if (saveType == SAVE_SRAM)
-            return (address - 0x0E000000 < saveData.size())
-            ? saveData[address - 0x0E000000] : 0xFF;
+        if (save.saveType == save.SAVE_FLASH64 || save.saveType == save.SAVE_FLASH128)
+            return save.readFlash(address);
+        if (save.saveType == save.SAVE_SRAM)
+            return (address - 0x0E000000 < save.saveData.size())
+            ? save.saveData[address - 0x0E000000] : 0xFF;
         return 0xFF;
     }
     else if (address >= 0x08000000 && address < 0x0E000000) {
@@ -302,11 +150,11 @@ uint8_t Bus::read8(uint32_t address) {
 uint16_t Bus::read16(uint32_t address) {
     if ((address & ~1) >= 0x0D000000 && (address & ~1) <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read16 addr=0x" << std::hex << address
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            return readEEPROM();
+        if (save.saveType == save.SAVE_EEPROM)
+            return save.readEEPROM();
         return 0xFF;
     }
     uint32_t addr = address & ~1;
@@ -343,11 +191,11 @@ uint32_t Bus::read32(uint32_t address) {
 
     if ((address & ~3) >= 0x0D000000 && (address & ~3) <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] read32 addr=0x" << std::hex << address
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            return readEEPROM();
+        if (save.saveType == save.SAVE_EEPROM)
+            return save.readEEPROM();
         return 0xFF;
     }
 
@@ -401,10 +249,10 @@ void Bus::executeDMA(int channel) {
         if (count == 0)
             count = (channel == 3) ? 0x10000 : 0x4000;
     }
-    if (saveType == SAVE_EEPROM &&
+    if (save.saveType == save.SAVE_EEPROM &&
         dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
-        if (count == 73) eepromLargeAddress = false;
-        else if (count == 81) eepromLargeAddress = true;
+        if (count == 73) save.eepromLargeAddress = false;
+        else if (count == 81) save.eepromLargeAddress = true;
     }
     uint8_t dest_adj = isFIFO ? 2 : (dma[channel].cnt >> 21) & 0x3;
     uint8_t src_adj = (dma[channel].cnt >> 23) & 0x3;
@@ -429,13 +277,13 @@ void Bus::executeDMA(int channel) {
     }
     dma[channel].isad = src;
     dma[channel].idad = (dest_adj == 3) ? dma[channel].dad : dest;
-    if (saveType == SAVE_EEPROM &&
+    if (save.saveType == save.SAVE_EEPROM &&
         dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
-        if (eepromState == EEPROM_WRITE_DATA ||
-            eepromState == EEPROM_WRITE_STOP ||
-            eepromState == EEPROM_REQUEST ||
-            eepromState == EEPROM_ADDRESS) {
-            eepromState = EEPROM_IDLE;
+        if (save.eepromState == save.EEPROM_WRITE_DATA ||
+            save.eepromState == save.EEPROM_WRITE_STOP ||
+            save.eepromState == save.EEPROM_REQUEST ||
+            save.eepromState == save.EEPROM_ADDRESS) {
+            save.eepromState = save.EEPROM_IDLE;
         }
     }
     if (!repeat)
@@ -447,9 +295,7 @@ void Bus::executeDMA(int channel) {
         io[0x203] = (IF >> 8) & 0xFF;
     }
 
-    dbg << "[DMA_EXEC_DONE] ch=" << channel
-        << " R0_after=0x" << std::hex << cpuptr->reg[0] << "\n";
-    dbg.flush();
+
 }
 void Bus::writeDMA(uint32_t address, uint8_t value) {
     int ch = (address - DMA0_BASE) / 12;
@@ -507,11 +353,11 @@ void Bus::write8(uint32_t address, uint8_t value) {
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write8 addr=0x" << std::hex << address
             << " val=0x" << (int)value
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            writeEEPROM(value & 1);
+        if (save.saveType == save.SAVE_EEPROM)
+            save.writeEEPROM(value & 1);
         return;
     }
     if (address == 0x02000219 || address == 0x0200021A) {
@@ -528,12 +374,12 @@ void Bus::write8(uint32_t address, uint8_t value) {
         dbg.flush();
     }
     if (address >= 0x0E000000 && address <= 0x0EFFFFFF) {
-        if (saveType == SAVE_FLASH64 || saveType == SAVE_FLASH128)
-            writeFlash(address, value);
-        else if (saveType == SAVE_SRAM) {
+        if (save.saveType == save.SAVE_FLASH64 || save.saveType == save.SAVE_FLASH128)
+            save.writeFlash(address, value);
+        else if (save.saveType == save.SAVE_SRAM) {
             uint32_t offset = address - 0x0E000000;
-            if (offset < saveData.size())
-                saveData[offset] = value;
+            if (offset < save.saveData.size())
+                save.saveData[offset] = value;
         }
         return;
     }
@@ -571,32 +417,7 @@ void Bus::write8(uint32_t address, uint8_t value) {
 
         // ── Timer registers 0x100-0x10F ──────────────────────────────
         if (ioAddr >= 0x100 && ioAddr <= 0x10F) {
-            int timerIdx = (ioAddr - 0x100) / 4;
-            int byteOff = (ioAddr - 0x100) % 4;
-
-            if (byteOff == 0) {
-                // Low byte of reload latch — don't touch running counter
-                ((uint8_t*)&timer_reload[timerIdx])[0] = value;
-            }
-            else if (byteOff == 1) {
-                // High byte of reload latch
-                ((uint8_t*)&timer_reload[timerIdx])[1] = value;
-            }
-            else if (byteOff == 2) {
-                // CNT_H low byte — bit 7 = start/stop
-                bool was_on = (io[ioAddr] & 0x80) != 0;
-                bool now_on = (value & 0x80) != 0;
-                io[ioAddr] = value;
-                if (!was_on && now_on) {
-                    // Reload counter from latch on 0→1 start edge
-                    io[0x100 + timerIdx * 4] = timer_reload[timerIdx] & 0xFF;
-                    io[0x101 + timerIdx * 4] = (timer_reload[timerIdx] >> 8) & 0xFF;
-                }
-            }
-            else {
-                // byteOff == 3: CNT_H high byte (unused on GBA)
-                io[ioAddr] = value;
-            }
+            timers.handleWrite(io, ioAddr, value);
             return;
         }
         // ─────────────────────────────────────────────────────────────
@@ -628,20 +449,12 @@ void Bus::write8(uint32_t address, uint8_t value) {
             break;
         case 0x200:
         case 0x201:
-            dbg << "[IE_WRITE] addr=0x" << std::hex << ioAddr
-                << " val=0x" << (int)value
-                << " IE_after=0x" << (io[0x200] | (io[0x201] << 8))
-                << " PC=0x" << cpuptr->reg[15] << "\n";
-            dbg.flush();
+
             io[ioAddr] = value;
             break;
         case 0x208:
         case 0x209:
-            dbg << "[IME_WRITE 208/209] addr=0x" << std::hex << ioAddr
-                << " val=0x" << (int)value
-                << " IME_after=0x" << (io[0x208] | (io[0x209] << 8))
-                << " PC=0x" << cpuptr->reg[15] << "\n";
-            dbg.flush();
+
             io[ioAddr] = value;
             break;
         case 0x28: case 0x29: case 0x2A: case 0x2B:
@@ -706,8 +519,8 @@ void Bus::write8(uint32_t address, uint8_t value) {
     }
 
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
-        if (saveType == SAVE_EEPROM)
-            writeEEPROM(value & 1);
+        if (save.saveType == save.SAVE_EEPROM)
+            save.writeEEPROM(value & 1);
         return;
     }
 }
@@ -718,11 +531,11 @@ void Bus::write16(uint32_t address, uint16_t value) {
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write16 addr=0x" << std::hex << address
             << " val=0x" << value
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            writeEEPROM(value & 1);
+        if (save.saveType == save.SAVE_EEPROM)
+            save.writeEEPROM(value & 1);
         return;
     }
     uint32_t addr = address & ~1;
@@ -767,11 +580,11 @@ void Bus::write32(uint32_t address, uint32_t value) {
     if (addr >= 0x0D000000 && addr <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write32 addr=0x" << std::hex << addr
             << " val=0x" << value
-            << " state=" << (int)eepromState
+            << " state=" << (int)save.eepromState
             << " PC=0x" << cpuptr->reg[15] << "\n";
         dbg.flush();
-        if (saveType == SAVE_EEPROM)
-            writeEEPROM(value & 1);
+        if (save.saveType == save.SAVE_EEPROM)
+            save.writeEEPROM(value & 1);
         return;
     }
 
@@ -856,52 +669,7 @@ void Bus::tick() {
     step_counter++;
 
     // ── Timers ────────────────────────────────────────────────────────
-    static uint32_t timer_ticks[4] = { 0, 0, 0, 0 };
-    const uint16_t prescaler_shifts[4] = { 0, 6, 8, 10 };
-    bool overflowed[4] = { false, false, false, false };
-
-    for (int i = 0; i < 4; i++) {
-        uint16_t cnt_h = io[0x102 + i * 4] | (io[0x103 + i * 4] << 8);
-        if (!(cnt_h & (1 << 7))) continue;
-
-        bool should_increment = false;
-        bool cascade_mode = (i > 0) && (cnt_h & (1 << 2));
-
-        if (cascade_mode) {
-            should_increment = overflowed[i - 1];
-        }
-        else {
-            uint8_t prescaler_sel = cnt_h & 0x3;
-            timer_ticks[i]++;
-            if (timer_ticks[i] >= (1u << prescaler_shifts[prescaler_sel])) {
-                timer_ticks[i] = 0;
-                should_increment = true;
-            }
-        }
-
-        if (should_increment) {
-            uint16_t current_val = io[0x100 + i * 4] | (io[0x101 + i * 4] << 8);
-            current_val++;
-
-            if (current_val == 0) {
-                overflowed[i] = true;
-                current_val = timer_reload[i];
-
-                if (cnt_h & (1 << 6)) {
-                    uint16_t IF = io[0x202] | (io[0x203] << 8);
-                    IF |= (1 << (3 + i));
-                    io[0x202] = IF & 0xFF;
-                    io[0x203] = (IF >> 8) & 0xFF;
-                }
-
-                // ── only on actual overflow ──
-                if (apuptr) apuptr->onTimerOverflow(i);
-            }
-
-            io[0x100 + i * 4] = current_val & 0xFF;
-            io[0x101 + i * 4] = (current_val >> 8) & 0xFF;
-        }
-    }
+    timers.tick(io, apuptr);
 
     // ── APU ──────────────────────────────────────────────────────────
     if (apuptr) apuptr->tick(1);
@@ -1017,70 +785,6 @@ void Bus::loadBIOS(const char* path) {
 }
 
 
-//--------------------------------------------------------------------
-// detect save type
-//--------------------------------------------------------------------
-void Bus::detectSaveType() {
-    const char* markers[] = {
-        "EEPROM_V",
-        "SRAM_V",
-        "FLASH_V",
-        "FLASH512_V",
-        "FLASH1M_V"
-    };
-    SaveType types[] = {
-        SAVE_EEPROM,
-        SAVE_SRAM,
-        SAVE_FLASH64,
-        SAVE_FLASH64,
-        SAVE_FLASH128
-    };
-
-    for (int i = 0; i < 5; i++) {
-        const char* marker = markers[i];
-        int markerLen = (int)strlen(marker);
-        for (int j = 0; j < (int)rom.size() - markerLen; j++) {
-            if (memcmp(rom.data() + j, marker, markerLen) == 0) {
-                saveType = types[i];
-                dbg << "[SAVE_TYPE_DETECTED] marker=\"" << marker
-                    << "\" at romOffset=0x" << std::hex << j
-                    << " saveType=" << std::dec << (int)saveType << "\n";
-                dbg.flush();
-                goto done;
-            }
-        }
-    }
-    dbg << "[SAVE_TYPE_DETECTED] no marker found, saveType=NONE/default="
-        << std::dec << (int)saveType << "\n";
-    dbg.flush();
-
-done:
-    switch (saveType) {
-    case SAVE_SRAM:     saveData.assign(0x8000, 0xFF); break;
-    case SAVE_EEPROM:   saveData.assign(0x2000, 0xFF); detectEEPROMSize(); break;
-    case SAVE_FLASH64:  saveData.assign(0x10000, 0xFF); break;
-    case SAVE_FLASH128: saveData.assign(0x20000, 0xFF); break;
-    default: break;
-    }
-
-    dbg << "[SAVE_TYPE_FINAL] saveType=" << std::dec << (int)saveType
-        << " saveData.size()=0x" << std::hex << saveData.size() << "\n";
-    dbg.flush();
-}
-void Bus::saveToDisk(const char* path) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) {
-        return;
-    }
-    f.write((char*)saveData.data(), saveData.size());
-}
-
-void Bus::loadFromDisk(const char* path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return;
-    f.read((char*)saveData.data(), saveData.size());
-}
-
 // -------------------------------------------------------------------
 // Load the ROM image into memory
 // -------------------------------------------------------------------
@@ -1091,8 +795,8 @@ void Bus::loadROM(const char* path) {
         return;
     }
     f.read((char*)rom.data(), 0x2000000);
-    detectSaveType();
-    loadFromDisk("game.sav");
+    save.detectSaveType(rom);
+    save.loadFromDisk("game.sav");
 }
 
 void Bus::setKeyState(int bit, bool pressed) {
@@ -1106,134 +810,4 @@ void Bus::setKeyState(int bit, bool pressed) {
 
     io[0x130] = keys & 0xFF;
     io[0x131] = (keys >> 8) & 0xFF;
-}
-
-uint8_t Bus::readFlash(uint32_t address) {
-    uint32_t offset = (address - 0x0E000000) + flashBank * 0x10000;
-    dbg << "[FLASH_READ] this=0x" << std::hex << (uintptr_t)this
-        << " idMode=" << flashIdMode
-        << " addr=0x" << address
-        << " offset=0x" << offset
-        << " bank=" << (int)flashBank
-        << " state=" << (int)flashState
-        << " erasePending=" << flashErasePending
-        << " val=0x" << (int)((offset < saveData.size()) ? saveData[offset] : 0xFF)
-        << " PC=0x" << cpuptr->reg[15] << "\n";
-    dbg.flush();
-
-    if (flashIdMode) {
-        if ((address & 0xFFFF) == 0) return 0xC2;
-        if ((address & 0xFFFF) == 1) return 0x09;
-        return 0xFF;
-    }
-
-    if (flashWritePending && offset == flashWriteAddr) {
-        flashWritePending = false;
-        return flashWriteVal ^ 0x80;
-    }
-
-    // Only poll on the erased sector address
-    if (flashErasePending && (offset & ~0xFFF) == flashEraseSectorStart) {
-        flashErasePollCount++;
-        if (flashErasePollCount < 4) {
-            // bit6 toggles, bit7=0 = busy
-            return (flashErasePollCount & 1) ? 0x40 : 0x00;
-        }
-        else {
-            flashErasePending = false;
-            return 0xFF; // done, erased
-        }
-    }
-
-    return (offset < saveData.size()) ? saveData[offset] : 0xFF;
-}
-
-
-void Bus::writeFlash(uint32_t address, uint8_t value) {
-    uint32_t offset = (address - 0x0E000000) + flashBank * 0x10000;
-    uint32_t shortAddr = address & 0xFFFF;
-
-   /* dbg << "[FLASH_WRITE] addr=0x" << std::hex << address
-        << " shortAddr=0x" << shortAddr
-        << " val=0x" << (int)value
-        << " state=" << (int)flashState
-        << " bank=" << (int)flashBank
-        << " PC=0x" << cpuptr->reg[15] << "\n";
-    dbg.flush();*/
-
-    switch (flashState) {
-    case FLASH_READ:
-        if (shortAddr == 0x5555 && value == 0xAA)
-            flashState = FLASH_CMD1;
-        break;
-
-    case FLASH_ERASE_CMD:
-        if (shortAddr == 0x5555 && value == 0xAA) {
-            flashEraseArmed = true;
-            flashState = FLASH_CMD1;
-        }
-        else if (shortAddr == 0x5555 && value == 0x10) {
-            std::fill(saveData.begin(), saveData.end(), 0xFF);
-            flashState = FLASH_READ;
-        }
-        break;
-
-    case FLASH_CMD1:
-        if (shortAddr == 0x2AAA && value == 0x55)
-            flashState = FLASH_CMD2;
-        else {
-            flashEraseArmed = false;
-            flashState = FLASH_READ;
-        }
-        break;
-
-    case FLASH_CMD2:
-        flashState = FLASH_READ;
-        if (flashEraseArmed && value == 0x30) {
-            flashEraseArmed = false;
-            uint32_t sectorStart = offset & ~0xFFF;
-            for (uint32_t i = sectorStart; i < sectorStart + 0x1000 && i < saveData.size(); i++)
-                saveData[i] = 0xFF;
-            dbg << "[FLASH_ERASE_SECTOR] sectorStart=0x" << std::hex << sectorStart
-                << " bank=" << (int)flashBank << "\n";
-            dbg.flush();
-            flashErasePending = true;
-            flashEraseSectorStart = sectorStart;
-            flashErasePollCount = 0;
-        }
-        else if (shortAddr == 0x5555) {
-            flashEraseArmed = false;
-            switch (value) {
-            case 0x90:
-                flashIdMode = true;
-                dbg << "[FLASH_ID_MODE_SET] this=0x" << std::hex << (uintptr_t)this << "\n";
-                dbg.flush();
-                break;
-            case 0xF0: flashIdMode = false; break;
-            case 0xA0: flashState = FLASH_WRITE; break;
-            case 0x80: flashState = FLASH_ERASE_CMD; break;
-            case 0xB0: flashState = FLASH_BANK; break;
-            }
-        }
-        break;
-
-    case FLASH_WRITE:
-        if (offset < saveData.size())
-            saveData[offset] = value;
-        flashWritePending = true;
-        flashWriteAddr = offset;
-        flashWriteVal = value;
-        flashState = FLASH_READ;
-        break;
-
-
-    case FLASH_BANK:
-        flashBank = value & 1;
-        flashState = FLASH_READ;
-        break;
-
-    default:
-        flashState = FLASH_READ;
-        break;
-    }
 }
