@@ -25,6 +25,7 @@ struct Bus {
     uint8_t vcount = 0;
     uint32_t step_counter = 0;
     uint16_t prev_irq_signal = 0;
+    uint32_t pendingDmaCycles = 0;
     int frameCount = 0;
     uint16_t win0h_scanline[160] = {};
     uint16_t win0v_scanline[160] = {};

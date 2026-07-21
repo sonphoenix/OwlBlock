@@ -21,7 +21,7 @@ int main() {
     bus.ppuptr = &ppu;
     bus.apuptr = &apu;
     bus.loadBIOS("bios/gba_bios.bin");
-    bus.loadROM("roms/Super Mario Advance 4 - Super Mario Bros. 3 (USA, Australia) (Rev 1).gba");
+    bus.loadROM("roms/Ashita no Joe - Makka ni Moeagare! (Japan).gba");
     dbg << "[LOOP_BYTES] ";
     for (uint32_t a = 0x800f19c; a <= 0x800f1a4; a += 2) {
         uint16_t instr = bus.read16(a);
@@ -199,6 +199,8 @@ int main() {
             int frame_cycles = 0;
             while (frame_cycles < 280896) {
                 int cycles = cpu.halted ? 1 : cpu.Step();
+                cycles += bus.pendingDmaCycles;
+                bus.pendingDmaCycles = 0;
                 for (int i = 0; i < cycles; i++) {
                     bus.tick();
                     bus.checkIRQ();

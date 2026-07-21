@@ -295,6 +295,8 @@ void Bus::executeDMA(int channel) {
         io[0x203] = (IF >> 8) & 0xFF;
     }
 
+    uint32_t cyclesPerUnit = word ? 4 : 2;
+    pendingDmaCycles += 2 + count * cyclesPerUnit;
 
 }
 void Bus::writeDMA(uint32_t address, uint8_t value) {
