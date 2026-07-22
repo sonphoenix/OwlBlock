@@ -5,27 +5,21 @@
 #include <vector>
 #include "save/SaveController.h"
 #include "timer/TimerController.h"
+#include "dma/DMAController.h"
 struct CPU;
 struct PPU;
 class APU;
-struct DMAchannel {
-    uint32_t sad = 0, dad = 0;
-    uint32_t cnt = 0;
-    uint32_t isad = 0;
-    uint32_t idad = 0;
-};
 struct Bus {
     CPU* cpuptr = nullptr;
     PPU* ppuptr = nullptr;
     APU* apuptr = nullptr;
+    //memory data register 
     uint32_t mdr = 0;
-    DMAchannel dma[4];
     uint32_t bios_latch = 0;
     uint8_t postflg = 0;
-    uint8_t vcount = 0;
-    uint32_t step_counter = 0;
-    uint16_t prev_irq_signal = 0;
-    uint32_t pendingDmaCycles = 0;
+    uint8_t vcount = 0;      // current scanline (0-227)
+    uint32_t step_counter = 0; // simple step counter
+    uint16_t prev_irq_signal = 0; // Member variable to track IRQ state
     int frameCount = 0;
     uint16_t win0h_scanline[160] = {};
     uint16_t win0v_scanline[160] = {};
@@ -40,6 +34,7 @@ struct Bus {
 
     SaveController save;
     TimerController timers;
+    DMAController dmaController;
 
     Bus();
     uint8_t  read8(uint32_t address);
@@ -54,8 +49,6 @@ struct Bus {
     void write32(uint32_t address, uint32_t value);
     void loadBIOS(const char* path);
     void loadROM(const char* path);
-    void writeDMA(uint32_t address, uint8_t value);
-    void executeDMA(int channel);
     void setKeyState(int bit, bool pressed);
     void onVBlank();
     void onHBlank();

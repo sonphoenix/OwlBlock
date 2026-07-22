@@ -495,16 +495,16 @@ void APU::writeRegister(uint32_t addr, uint8_t val) {
 
 void APU::onTimerOverflow(int timerIndex) {
     static uint32_t lastOverflowCycle = 0;
-    dbg << "[TIMER_OVERFLOW] idx=" << timerIndex
+    /*dbg << "[TIMER_OVERFLOW] idx=" << timerIndex
         << " gap=" << (bus.step_counter + 1232 * bus.vcount) - lastOverflowCycle
-        << " dma0_dad=0x" << std::hex << bus.dma[0].dad
-        << " dma0_idad=0x" << bus.dma[0].idad
-        << " dma0_cnt=0x" << bus.dma[0].cnt
-        << " dma3_dad=0x" << bus.dma[3].dad
-        << " dma3_idad=0x" << bus.dma[3].idad
-        << " dma3_cnt=0x" << bus.dma[3].cnt
+        << " dma0_dad=0x" << std::hex << bus.dmaController.channels[0].dad
+        << " dma0_idad=0x" << bus.dmaController.channels[0].idad
+        << " dma0_cnt=0x" << bus.dmaController.channels[0].cnt
+        << " dma3_dad=0x" << bus.dmaController.channels[3].dad
+        << " dma3_idad=0x" << bus.dmaController.channels[3].idad
+        << " dma3_cnt=0x" << bus.dmaController.channels[3].cnt
         << "\n";
-    dbg.flush();
+    dbg.flush();*/
     lastOverflowCycle = bus.step_counter + 1232 * bus.vcount;
     if (!apuEnabled) return;
     if ((int)fifoA.timerSelect == timerIndex) {
@@ -517,19 +517,20 @@ void APU::onTimerOverflow(int timerIndex) {
     }
 }
 
+
 void APU::onFIFORefill(int fifoIndex) {
     uint32_t fifoAddr = (fifoIndex == 0) ? 0x040000A0 : 0x040000A4;
     for (int ch = 1; ch <= 2; ch++) {
-        auto& dma = bus.dma[ch];
-        dbg << "[APU] checking DMA" << ch
+        auto& dma = bus.dmaController.channels[ch];
+       /* dbg << "[APU] checking DMA" << ch
             << " enabled=" << ((dma.cnt >> 31) & 1)
             << " timing=" << ((dma.cnt >> 28) & 0x3)
             << " dad=0x" << std::hex << dma.dad << "\n";
-        dbg.flush();
+        dbg.flush();*/
         if (!(dma.cnt & (1u << 31))) continue;
         if (((dma.cnt >> 28) & 0x3) != 3) continue;
         if (dma.dad != fifoAddr) continue;
-        bus.executeDMA(ch);
+        bus.dmaController.execute(ch, bus);
         break;
     }
 }

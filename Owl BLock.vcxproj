@@ -151,6 +151,7 @@
     <ClCompile Include="src\core\bus.cpp" />
     <ClCompile Include="src\core\cpu.cpp" />
     <ClCompile Include="src\debug\DebugView.cpp" />
+    <ClCompile Include="src\dma\dmaController.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\save\saveController.cpp" />
     <ClCompile Include="src\timer\timerController.cpp" />
@@ -163,6 +164,7 @@
     <ClInclude Include="include\debug\DebugView.h" />
     <ClInclude Include="include\debug\Disassembler.h" />
     <ClInclude Include="include\common\gba_registers.h" />
+    <ClInclude Include="include\dma\dmaController.h" />
     <ClInclude Include="include\save\saveController.h" />
     <ClInclude Include="include\timer\timerController.h" />
     <ClInclude Include="include\vendor\nlohmann\adl_serializer.hpp" />

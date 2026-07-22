@@ -2,6 +2,7 @@
 #include "core/cpu.h"
 #include "video/PPU.h"
 #include "audio/apu.h"
+#include "dma/DMAController.h"
 #include "common/gba_registers.h"
 #include <algorithm> 
 #include <cstring>
@@ -39,28 +40,11 @@ inline uint32_t mirror(uint32_t addr, uint32_t base, uint32_t size) {
 void Bus::setCPU(CPU* _cpu) { cpuptr = _cpu; }
 
 void Bus::onVBlank() {
-   //dbg << "saaar VBLANNNNKK SAAAR \n";dbg.flush();
-    for (int ch = 0; ch < 4; ch++) {
-        if (!(dma[ch].cnt & (1u << 31))) continue;
-        if (((dma[ch].cnt >> 28) & 0x3) != 1) continue;
-
-        uint8_t dest_adj = (dma[ch].cnt >> 21) & 0x3;
-        if (dest_adj == 3) dma[ch].idad = dma[ch].dad;
-        executeDMA(ch);
-    }
+    dmaController.onVBlank(*this);
 }
 
 void Bus::onHBlank() {
-    //dbg << "saaar HBLANNNNKK here \n";dbg.flush();
-
-    for (int ch = 0; ch < 4; ch++) {
-        if (!(dma[ch].cnt & (1u << 31))) continue;
-        if (((dma[ch].cnt >> 28) & 0x3) != 2) continue;
-
-        uint8_t dest_adj = (dma[ch].cnt >> 21) & 0x3;
-        if (dest_adj == 3) dma[ch].idad = dma[ch].dad;
-        executeDMA(ch);
-    }
+    dmaController.onHBlank(*this);
 }
 
 static inline bool isOpenBusRegion(uint32_t address) {
@@ -173,10 +157,6 @@ uint32_t Bus::read32(uint32_t address) {
             | ((uint32_t)read8(alignedAddr + 1) << 8)
             | ((uint32_t)read8(alignedAddr + 2) << 16)
             | ((uint32_t)read8(alignedAddr + 3) << 24);
-        dbg << "[STACK_READ] addr=0x" << std::hex << address
-            << " val=0x" << val
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
     }
     if ((address & ~3) == 0x03FFFFFC) {
         uint32_t alignedAddr = address & ~3;
@@ -225,101 +205,6 @@ uint32_t Bus::read32(uint32_t address) {
     }
 
     return result;
-}
-
-void Bus::executeDMA(int channel) {
-   /* dbg << "[DMA_EXEC] ch=" << channel
-        << " src=0x" << std::hex << dma[channel].isad
-        << " dst=0x" << dma[channel].idad
-        << " cnt=0x" << dma[channel].cnt
-        << " R0_before=0x" << cpuptr->reg[0] << "\n";
-    dbg.flush();*/
-
-    bool isFIFO = (((dma[channel].cnt >> 28) & 0x3) == 3) &&
-        (dma[channel].dad == 0x040000A0 ||
-            dma[channel].dad == 0x040000A4);
-    uint32_t src = dma[channel].isad;
-    uint32_t dest = dma[channel].idad;
-    uint32_t count;
-    if (isFIFO) {
-        count = 4;
-    }
-    else {
-        count = dma[channel].cnt & 0x0000FFFF;
-        if (count == 0)
-            count = (channel == 3) ? 0x10000 : 0x4000;
-    }
-    if (save.saveType == save.SAVE_EEPROM &&
-        dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
-        if (count == 73) save.eepromLargeAddress = false;
-        else if (count == 81) save.eepromLargeAddress = true;
-    }
-    uint8_t dest_adj = isFIFO ? 2 : (dma[channel].cnt >> 21) & 0x3;
-    uint8_t src_adj = (dma[channel].cnt >> 23) & 0x3;
-    uint8_t repeat = (dma[channel].cnt >> 25) & 0x1;
-    uint8_t word = (dma[channel].cnt >> 26) & 0x1;
-    uint8_t irq = (dma[channel].cnt >> 30) & 0x1;
-    uint8_t unit = word ? 4 : 2;
-    for (uint32_t i = 0; i < count; i++) {
-        if (word) write32(dest, read32(src));
-        else      write16(dest, read16(src));
-        switch (dest_adj) {
-        case 0: dest += unit; break;
-        case 1: dest -= unit; break;
-        case 2: break;
-        case 3: dest += unit; break;
-        }
-        switch (src_adj) {
-        case 0: src += unit; break;
-        case 1: src -= unit; break;
-        case 2: break;
-        }
-    }
-    dma[channel].isad = src;
-    dma[channel].idad = (dest_adj == 3) ? dma[channel].dad : dest;
-    if (save.saveType == save.SAVE_EEPROM &&
-        dma[channel].dad >= 0x0D000000 && dma[channel].dad <= 0x0DFFFFFF) {
-        if (save.eepromState == save.EEPROM_WRITE_DATA ||
-            save.eepromState == save.EEPROM_WRITE_STOP ||
-            save.eepromState == save.EEPROM_REQUEST ||
-            save.eepromState == save.EEPROM_ADDRESS) {
-            save.eepromState = save.EEPROM_IDLE;
-        }
-    }
-    if (!repeat)
-        dma[channel].cnt &= ~(1u << 31);
-    if (irq) {
-        uint16_t IF = io[0x202] | (io[0x203] << 8);
-        IF |= (1 << (8 + channel));
-        io[0x202] = IF & 0xFF;
-        io[0x203] = (IF >> 8) & 0xFF;
-    }
-
-    uint32_t cyclesPerUnit = word ? 4 : 2;
-    pendingDmaCycles += 2 + count * cyclesPerUnit;
-
-}
-void Bus::writeDMA(uint32_t address, uint8_t value) {
-    int ch = (address - DMA0_BASE) / 12;
-    int offset = (address - DMA0_BASE) % 12;
-
-    /*dbg << "[DMA_WRITE] ch=" << ch << " offset=" << offset
-        << " val=0x" << std::hex << (int)value
-        << " PC=0x" << cpuptr->reg[15] << "\n";
-    dbg.flush();*/
-
-    if (offset < 4) { ((uint8_t*)&dma[ch].sad)[offset] = value; }
-    else if (offset < 8) { ((uint8_t*)&dma[ch].dad)[offset - 4] = value; }
-    else { ((uint8_t*)&dma[ch].cnt)[offset - 8] = value; }
-
-    if (offset == 11) {
-        if (dma[ch].cnt & (1u << 31)) {
-            dma[ch].isad = dma[ch].sad;
-            dma[ch].idad = dma[ch].dad;
-            uint8_t tm = (dma[ch].cnt >> 28) & 0x3;
-            if (tm == 0) executeDMA(ch);
-        }
-    }
 }
 
 // -------------------------------------------------------------------
@@ -405,7 +290,10 @@ void Bus::write8(uint32_t address, uint8_t value) {
         uint32_t ioAddr = address - 0x04000000;
 
         if (address >= DMA0_BASE && address <= 0x040000DF) {
-            writeDMA(address, value);
+            int ch = (address - DMA0_BASE) / 12;
+            if (dmaController.writeReg(address, value)) {
+                dmaController.execute(ch, *this);
+            }
             return;
         }
 
