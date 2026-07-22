@@ -1,10 +1,10 @@
-# Owl Block — GBA Emulator
+# Owl Block â€” GBA Emulator
 
 A Game Boy Advance emulator written in C++ from scratch, built as a learning project in hardware-accurate emulation.
 
 ## Current Status
 
-### CPU — ARM7TDMI
+### CPU â€” ARM4TDMI
 - Full ARM and THUMB instruction sets
 - All data processing instructions (AND, EOR, SUB, ADD, ADC, SBC, RSC, TST, TEQ, CMP, CMN, ORR, MOV, BIC, MVN)
 - Branch / BL / BX / BLX
@@ -14,19 +14,19 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 - MRS/MSR (CPSR/SPSR access)
 - SWP/SWPB
 - All CPU modes with correct banked register switching (USR/FIQ/IRQ/SVC/ABT/UND/SYS)
-- SWI handling — HLE for SWI 4 (IntrWait) and SWI 5 (VBlankIntrWait)
+- SWI handling â€” HLE for SWI 4 (IntrWait) and SWI 5 (VBlankIntrWait)
 - Passes standard ARM/THUMB test suites
 
 ### Bus / Memory
 - Full GBA memory map: BIOS, EWRAM, IWRAM, VRAM, OAM, PRAM, ROM, I/O
 - BIOS protection and latch emulation
-- IWRAM mirroring across full 0x03000000–0x03FFFFFF range
+- IWRAM mirroring across full 0x03000000â€“0x03FFFFFF range
 - ROM mirrors at 0x08000000, 0x0A000000, 0x0C000000
 - VRAM byte-write rules (ignored in tiled modes, halfword-duplicated in bitmap/OBJ area)
 - Palette RAM byte-write duplication
 
 ### DMA
-- All 4 channels (DMA0–DMA3)
+- All 4 channels (DMA0â€“DMA3)
 - Immediate, VBlank, HBlank, and Special (FIFO) timing modes
 - Word and halfword transfer sizes
 - Source/destination increment/decrement/fixed/reload modes
@@ -37,11 +37,11 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 ### Interrupts
 - IME / IE / IF registers
 - IRQ dispatch via per-cycle checkIRQ()
-- VBlank, HBlank, VCount, Timer 0–3, DMA 0–3, Keypad interrupts
+- VBlank, HBlank, VCount, Timer 0â€“3, DMA 0â€“3, Keypad interrupts
 - CPU halt/unhalt via HALTCNT (0x04000301)
 
 ### Timers
-- All 4 timers (TM0–TM3)
+- All 4 timers (TM0â€“TM3)
 - Prescaler modes (1/64/256/1024 cycles)
 - Cascade mode (timer N triggered by overflow of timer N-1)
 - Shadow reload registers (reload latch separate from running counter)
@@ -87,8 +87,8 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 Open `Owl BLock.sln` in Visual Studio 2022 and build in x64 Debug or Release.
 
 Dependencies are included:
-- [raylib](https://www.raylib.com/) — rendering and audio
-- [nlohmann/json](https://github.com/nlohmann/json) — included in `include/nlohmann/`
+- [raylib](https://www.raylib.com/) â€” rendering and audio
+- [nlohmann/json](https://github.com/nlohmann/json) â€” included in `include/nlohmann/`
 
 ## Setup
 
