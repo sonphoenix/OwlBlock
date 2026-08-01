@@ -154,7 +154,6 @@
     <ClCompile Include="src\dma\dmaController.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\save\saveController.cpp" />
-    <ClCompile Include="src\timer\timerController.cpp" />
     <ClCompile Include="src\video\PPU.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -166,6 +165,7 @@
     <ClInclude Include="include\common\gba_registers.h" />
     <ClInclude Include="include\dma\dmaController.h" />
     <ClInclude Include="include\save\saveController.h" />
+    <ClInclude Include="include\scheduler\Scheduler.h" />
     <ClInclude Include="include\timer\timerController.h" />
     <ClInclude Include="include\vendor\nlohmann\adl_serializer.hpp" />
     <ClInclude Include="include\vendor\nlohmann\json.hpp" />

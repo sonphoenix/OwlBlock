@@ -10,6 +10,22 @@
 #include "debug/DebugView.h"
 
 std::ofstream dbg("debug.txt");
+
+const int GAME_W = 240, GAME_H = 160;
+const int DEBUG_PANEL_W = 810;
+
+void ApplyLayout(bool debugMode, float& gameScale) {
+    if (debugMode) {
+        gameScale = 3.0f;
+        SetWindowSize(GAME_W * (int)gameScale + DEBUG_PANEL_W, 600);
+    }
+    else {
+        // fill the window with just the game view, bigger scale since there's no panel to share with
+        gameScale = 4.0f;
+        SetWindowSize(GAME_W * (int)gameScale, GAME_H * (int)gameScale);
+    }
+}
+
 int main() {
     Bus bus;
     CPU cpu(bus);
@@ -21,7 +37,8 @@ int main() {
     bus.ppuptr = &ppu;
     bus.apuptr = &apu;
     bus.loadBIOS("bios/gba_bios.bin");
-    bus.loadROM("roms/Super Mario Advance 4 - Super Mario Bros. 3 (USA, Australia) (Rev 1).gba");
+    bus.loadROM("roms/redfire.gba");
+    bus.init();
     dbg << "[LOOP_BYTES] ";
     for (uint32_t a = 0x800f19c; a <= 0x800f1a4; a += 2) {
         uint16_t instr = bus.read16(a);
@@ -32,15 +49,21 @@ int main() {
     cpu.skipBIOS();
     dbg << "[AFTER_SKIPBIOS] PC=0x" << std::hex << cpu.reg[15] << "\n";
     dbg.flush();
-    InitWindow(240 * 3 + 810, 600, "gba emulator + debugger");
+
+    InitWindow(GAME_W * 3 + DEBUG_PANEL_W, 600, "Owl Block");
     apu.init();
     SetTargetFPS(60);
-    Image img = GenImageColor(240, 160, BLACK);
+    ToggleFullscreen();
+
+    Image img = GenImageColor(GAME_W, GAME_H, BLACK);
     Texture2D texture = LoadTextureFromImage(img);
     UnloadImage(img);
-    bool paused = true;  // start paused so you can step from the very first instruction
 
-    // ---- Run-to-breakpoint state ----
+    bool paused = false;
+    bool debugMode = false;
+    float gameScale = 3.0f;
+    ApplyLayout(debugMode, gameScale);
+
     char bpInputBuf[9] = { 0 };
     bool bpInputActive = false;
     bool bpEnabled = false;
@@ -48,7 +71,6 @@ int main() {
     bool runningToBp = false;
 
     while (!WindowShouldClose()) {
-        // ---- Breakpoint address text entry (active any time, doesn't need pause) ----
         if (bpInputActive) {
             int key = GetCharPressed();
             while (key > 0) {
@@ -83,9 +105,13 @@ int main() {
             }
         }
 
-        if (IsKeyPressed(KEY_P)) paused = !paused;  // P toggles pause
+        if (IsKeyPressed(KEY_P)) paused = !paused;
 
-        // ---- Run-to-breakpoint trigger: R while paused, with a breakpoint set ----
+        if (IsKeyPressed(KEY_F1)) {
+            debugMode = !debugMode;
+            ApplyLayout(debugMode, gameScale);
+        }
+
         if (paused && !bpInputActive && bpEnabled && IsKeyPressed(KEY_R)) {
             runningToBp = true;
         }
@@ -103,10 +129,10 @@ int main() {
                 }
                 int cycles = cpu.halted ? 1 : cpu.Step();
                 dbgView.hasSteppedOnce = true;
-                for (int i = 0; i < cycles; i++) {
-                    bus.tick();
-                    bus.checkIRQ();
-                }
+                cycles += bus.dmaController.pendingCycles;
+                bus.dmaController.pendingCycles = 0;
+                bus.advance(cycles);
+                bus.checkIRQ();
                 stepped++;
             }
             if (IsKeyPressed(KEY_ESCAPE)) { runningToBp = false; paused = true; }
@@ -143,12 +169,13 @@ int main() {
 
             for (int s = 0; s < stepsThisTick; s++) {
                 int cycles = cpu.halted ? 1 : cpu.Step();
-                for (int i = 0; i < cycles; i++) {
-                    bus.tick();
-                    bus.checkIRQ();
-                }
+                cycles += bus.dmaController.pendingCycles;
+                bus.dmaController.pendingCycles = 0;
+                bus.advance(cycles);
+                bus.checkIRQ();
             }
         }
+
         uint16_t keys = 0x03FF;
         if (IsKeyDown(KEY_X))         keys &= ~(1 << 0);
         if (IsKeyDown(KEY_Z))         keys &= ~(1 << 1);
@@ -161,39 +188,31 @@ int main() {
         if (IsKeyDown(KEY_S))         keys &= ~(1 << 8);
         if (IsKeyDown(KEY_A))         keys &= ~(1 << 9);
 
-        // --- Gamepad (new) ---
         const int GAMEPAD_ID = 0;
         if (IsGamepadAvailable(GAMEPAD_ID)) {
-            // Face buttons -> A / B
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))  keys &= ~(1 << 0); // A
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) keys &= ~(1 << 1); // B
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))  keys &= ~(1 << 0);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) keys &= ~(1 << 1);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_LEFT))  keys &= ~(1 << 2);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_RIGHT)) keys &= ~(1 << 3);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) keys &= ~(1 << 4);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  keys &= ~(1 << 5);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_UP))    keys &= ~(1 << 6);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_DOWN))  keys &= ~(1 << 7);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_TRIGGER_1))  keys &= ~(1 << 8);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) keys &= ~(1 << 9);
 
-            // Select / Start
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_LEFT))  keys &= ~(1 << 2); // Select
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_MIDDLE_RIGHT)) keys &= ~(1 << 3); // Start
-
-            // D-pad
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) keys &= ~(1 << 4); // Right
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  keys &= ~(1 << 5); // Left
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_UP))    keys &= ~(1 << 6); // Up
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_DOWN))  keys &= ~(1 << 7); // Down
-
-            // L / R shoulder buttons
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_TRIGGER_1))  keys &= ~(1 << 8); // L
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) keys &= ~(1 << 9); // R
-
-            // Optional: left analog stick as an alternative D-pad, with deadzone
             const float DEADZONE = 0.4f;
             float axisX = GetGamepadAxisMovement(GAMEPAD_ID, GAMEPAD_AXIS_LEFT_X);
             float axisY = GetGamepadAxisMovement(GAMEPAD_ID, GAMEPAD_AXIS_LEFT_Y);
-            if (axisX > DEADZONE) keys &= ~(1 << 4); // Right
-            if (axisX < -DEADZONE) keys &= ~(1 << 5); // Left
-            if (axisY > DEADZONE) keys &= ~(1 << 7); // Down
-            if (axisY < -DEADZONE) keys &= ~(1 << 6); // Up
+            if (axisX > DEADZONE) keys &= ~(1 << 4);
+            if (axisX < -DEADZONE) keys &= ~(1 << 5);
+            if (axisY > DEADZONE) keys &= ~(1 << 7);
+            if (axisY < -DEADZONE) keys &= ~(1 << 6);
         }
 
         bus.io[0x130] = keys & 0xFF;
         bus.io[0x131] = (keys >> 8) & 0xFF;
+
         if (!paused) {
             bus.frameCount++;
             int frame_cycles = 0;
@@ -201,18 +220,21 @@ int main() {
                 int cycles = cpu.halted ? 1 : cpu.Step();
                 cycles += bus.dmaController.pendingCycles;
                 bus.dmaController.pendingCycles = 0;
-                for (int i = 0; i < cycles; i++) {
-                    bus.tick();
-                    bus.checkIRQ();
-                }
+                bus.advance(cycles);
+                bus.checkIRQ();
                 frame_cycles += cycles;
             }
             UpdateTexture(texture, ppu.frameBuffer.data());
         }
+
         BeginDrawing();
         ClearBackground({ 10, 10, 20, 255 });
-        DrawTextureEx(texture, { 0, 0 }, 0.0f, 3.0f, WHITE);
-        dbgView.Draw(240 * 3 + 5, 0, 810, 600);
+        DrawTextureEx(texture, { 0, 0 }, 0.0f, gameScale, WHITE);
+
+        if (debugMode) {
+            dbgView.Draw((int)(GAME_W * gameScale) + 5, 0, DEBUG_PANEL_W, 600);
+        }
+
         DrawFPS(10, 10);
         if (runningToBp) {
             char buf[80];
@@ -220,11 +242,10 @@ int main() {
             DrawText(buf, 10, 10, 16, ORANGE);
         }
         else if (paused) {
-            DrawText("PAUSED — [P] resume  [O] step  [hold O] fast-step  [SHIFT+O] turbo (100x)", 10, 10, 16, YELLOW);
+            DrawText("PAUSED - [P] resume  [O] step  [hold O] fast-step  [SHIFT+O] turbo (100x)", 10, 10, 16, YELLOW);
         }
 
-        // Breakpoint box, always visible
-        {
+        if (debugMode) {
             char bpLabel[64];
             if (bpInputActive)
                 snprintf(bpLabel, sizeof(bpLabel), "BREAKPOINT: %s_", bpInputBuf);
@@ -235,6 +256,7 @@ int main() {
             Color bpColor = bpInputActive ? WHITE : (bpEnabled ? Color{ 120,220,255,255 } : Color{ 120,120,130,255 });
             DrawText(bpLabel, 10, 32, 14, bpColor);
         }
+
         EndDrawing();
     }
     bus.save.saveToDisk("game.sav");

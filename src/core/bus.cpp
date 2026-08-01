@@ -13,8 +13,7 @@ Bus::Bus() :
     apuptr(nullptr),
     bios_latch(0),      // Initial BIOS latch is 0
     postflg(0),
-    vcount(0),
-    step_counter(0) {
+    vcount(0) {
     bios.assign(0x4000, 0);      // 16 KB
     ewram.assign(0x40000, 0);    // 256 KB
     iwram.assign(0x8000, 0);     // 32 KB
@@ -93,6 +92,11 @@ uint8_t Bus::read8(uint32_t address) {
         uint32_t ioAddr = address - 0x04000000;
         if (address == 0x04000300) result = postflg;
         else if (address == 0x04000006) result = vcount;
+        else if (ioAddr >= 0x100 && ioAddr <= 0x10F && ((ioAddr - 0x100) % 4) < 2) {
+            int i = (ioAddr - 0x100) / 4;
+            timers.snapshotValue(i, io);   // pull it up to date before reading
+            result = io[ioAddr];
+        }
         else result = io[ioAddr];
     }
     else if (address >= 0x05000000 && address < 0x06000000) {
@@ -212,31 +216,6 @@ uint32_t Bus::read32(uint32_t address) {
 // -------------------------------------------------------------------
 void Bus::write8(uint32_t address, uint8_t value) {
     mdr = (uint32_t)value * 0x01010101u;
-
-    if (address >= 0x0600C000 && address <= 0x0600C010) {
-        dbg << "[VRAM_CB3_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    if ((address & ~1) == 0x0303010C || address == 0x0303010C || address == 0x0303010D) {
-        dbg << "[WRITE_303010C] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    if (address >= 0x02000000 && address <= 0x02000003 && value != 0) {
-        dbg << "[EWRAM_NONZERO_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
-    if (address >= 0x03007FF8 && address <= 0x03007FFF) {
-        dbg << "[IWRAM_TAIL_WRITE] addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
-    }
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
         dbg << "[EEPROM_ACCESS] write8 addr=0x" << std::hex << address
             << " val=0x" << (int)value
@@ -313,6 +292,17 @@ void Bus::write8(uint32_t address, uint8_t value) {
         // ─────────────────────────────────────────────────────────────
 
         switch (ioAddr) {
+        case 0x00:
+        case 0x01: {
+            uint16_t before = io[0x00] | (io[0x01] << 8);
+            io[ioAddr] = value;
+            uint16_t after = io[0x00] | (io[0x01] << 8);
+            dbg << "[DISPCNT_WRITE] before=0x" << std::hex << before
+                << " after=0x" << after
+                << " PC=0x" << cpuptr->reg[15] << "\n";
+            dbg.flush();
+            break;
+        }
         case 0x04:
             io[0x04] = (io[0x04] & 0x07) | (value & 0x38);
             dbg << "[DISPSTAT_WRITE] val=0x" << std::hex << (int)value
@@ -414,7 +404,6 @@ void Bus::write8(uint32_t address, uint8_t value) {
         return;
     }
 }
-
 void Bus::write16(uint32_t address, uint16_t value) {
     mdr = (uint32_t)value * 0x00010001u;
 
@@ -552,92 +541,102 @@ void Bus::checkIRQ() {
         cpuptr->triggerIRQ();
     }
 }
-// -------------------------------------------------------------------
-// Advance the LCD scanline counter (call after every CPU step)
-// -------------------------------------------------------------------
-void Bus::tick() {
-    step_counter++;
-
-    // ── Timers ────────────────────────────────────────────────────────
-    timers.tick(io, apuptr);
-
-    // ── APU ──────────────────────────────────────────────────────────
-    if (apuptr) apuptr->tick(1);
 
 
-    // ── LCD timing ───────────────────────────────────────────────────
-    if (step_counter == 960) {
-        if (vcount < 160)
-            ppuptr->renderScanLine(vcount);
+void Bus::init() {
+    timers.init(scheduler, io, apuptr);
+    scheduler.scheduleIn(EVT_HBLANK, 960, [this]() { fireHBlank(); });
+    scheduler.scheduleIn(EVT_SCANLINE_ADVANCE, 1232, [this]() { fireScanlineAdvance(); });
+}
 
-        io[0x04] |= (1 << 1);  // HBlank flag
+void Bus::advance(uint32_t cycles) {
+    scheduler.advanceBy(cycles);
+    if (apuptr) apuptr->tick(cycles);
+}
 
-        if (io[0x04] & (1 << 4)) {
+void Bus::fireHBlank() {
+    if (vcount < 160) ppuptr->renderScanLine(vcount);
+    io[0x04] |= (1 << 1);
+    if (io[0x04] & (1 << 4)) {
+        uint16_t IF = io[0x202] | (io[0x203] << 8);
+        IF |= (1 << 1);
+        io[0x202] = IF & 0xFF;
+        io[0x203] = (IF >> 8) & 0xFF;
+    }
+    if (vcount < 160) {
+        onHBlank();
+        win0h_scanline[vcount] = io[0x40] | (io[0x41] << 8);
+    }
+
+    // --- NEW: throttled display-state log ---
+    static uint64_t lastDispLog = 0;
+    if (scheduler.currentCycle - lastDispLog > 200000) {
+        uint16_t dispcnt = io[0x00] | (io[0x01] << 8);
+        uint16_t backdrop = pram[0] | (pram[1] << 8);
+        dbg << "[DISP_STATE] DISPCNT=0x" << std::hex << dispcnt
+            << " forcedBlank=" << ((dispcnt >> 7) & 1)
+            << " backdrop=0x" << backdrop << "\n";
+        dbg.flush();
+        lastDispLog = scheduler.currentCycle;
+    }
+    // --- end new ---
+
+    scheduler.scheduleIn(EVT_HBLANK, 1232, [this]() { fireHBlank(); });
+}
+
+void Bus::fireScanlineAdvance() {
+    static uint32_t scanlinesThisFrame = 0;
+    if (vcount == 0) {
+        dbg << "[SCANLINES_PER_FRAME] " << std::dec << scanlinesThisFrame << "\n";
+        dbg.flush();
+        scanlinesThisFrame = 0;
+    }
+    else {
+        scanlinesThisFrame++;
+    }
+    io[0x04] &= ~(1 << 1);
+    vcount = (vcount + 1) % 228;
+    io[0x06] = vcount & 0xFF;
+    io[0x07] = 0;
+
+    uint8_t vcount_trigger = io[0x05];
+    if (vcount == vcount_trigger) {
+        io[0x04] |= (1 << 2);
+        if (io[0x04] & (1 << 5)) {
             uint16_t IF = io[0x202] | (io[0x203] << 8);
-            IF |= (1 << 1);
+            IF |= (1 << 2);
             io[0x202] = IF & 0xFF;
             io[0x203] = (IF >> 8) & 0xFF;
         }
-
-        if (vcount < 160) {
-            onHBlank();
-            win0h_scanline[vcount] = io[0x40] | (io[0x41] << 8);
-        }
+    }
+    else {
+        io[0x04] &= ~(1 << 2);
     }
 
-    if (step_counter >= 1232) {
-        step_counter = 0;
-
-        io[0x04] &= ~(1 << 1);  // Clear HBlank flag
-
-        vcount = (vcount + 1) % 228;
-        io[0x06] = vcount & 0xFF;
-        io[0x07] = 0;
-
-        uint8_t vcount_trigger = io[0x05];
-        if (vcount == vcount_trigger) {
-            io[0x04] |= (1 << 2);
-            if (io[0x04] & (1 << 5)) {
-                uint16_t IF = io[0x202] | (io[0x203] << 8);
-                IF |= (1 << 2);
-                io[0x202] = IF & 0xFF;
-                io[0x203] = (IF >> 8) & 0xFF;
-            }
+    if (vcount == 160) {
+        io[0x04] |= 1;
+        if (io[0x04] & (1 << 3)) {
+            uint16_t IF = io[0x202] | (io[0x203] << 8);
+            IF |= 1;
+            io[0x202] = IF & 0xFF;
+            io[0x203] = (IF >> 8) & 0xFF;
         }
-        else {
-            io[0x04] &= ~(1 << 2);
-        }
-
-        if (vcount == 160) {
-            dbg << "[VBLANK_IF_SET] frame_cycle_total=" << step_counter
-                << " vcount=" << (int)vcount << "\n";
-            dbg.flush();
-            io[0x04] |= 1;
-
-            if (io[0x04] & (1 << 3)) {
-                uint16_t IF = io[0x202] | (io[0x203] << 8);
-                IF |= 1;
-                io[0x202] = IF & 0xFF;
-                io[0x203] = (IF >> 8) & 0xFF;
-            }
-
-            onVBlank();
-
-            if (ppuptr) {
-                auto se = [](int32_t v) -> int32_t {
-                    return (v & 0x08000000) ? (v | 0xF0000000) : (v & 0x0FFFFFFF);
-                    };
-                ppuptr->bg2RefX = se((int32_t)(io[0x28] | (io[0x29] << 8) | (io[0x2A] << 16) | (io[0x2B] << 24)));
-                ppuptr->bg2RefY = se((int32_t)(io[0x2C] | (io[0x2D] << 8) | (io[0x2E] << 16) | (io[0x2F] << 24)));
-                ppuptr->bg3RefX = se((int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24)));
-                ppuptr->bg3RefY = se((int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24)));
-            }
-        }
-        else if (vcount == 0) {
-            io[0x04] &= ~1;
+        onVBlank();
+        if (ppuptr) {
+            auto se = [](int32_t v) -> int32_t {
+                return (v & 0x08000000) ? (v | 0xF0000000) : (v & 0x0FFFFFFF);
+                };
+            ppuptr->bg2RefX = se((int32_t)(io[0x28] | (io[0x29] << 8) | (io[0x2A] << 16) | (io[0x2B] << 24)));
+            ppuptr->bg2RefY = se((int32_t)(io[0x2C] | (io[0x2D] << 8) | (io[0x2E] << 16) | (io[0x2F] << 24)));
+            ppuptr->bg3RefX = se((int32_t)(io[0x38] | (io[0x39] << 8) | (io[0x3A] << 16) | (io[0x3B] << 24)));
+            ppuptr->bg3RefY = se((int32_t)(io[0x3C] | (io[0x3D] << 8) | (io[0x3E] << 16) | (io[0x3F] << 24)));
         }
     }
-    // IRQ dispatch removed — call checkIRQ() from main loop instead
+    else if (vcount == 0) {
+        io[0x04] &= ~1;
+    }
+
+    scheduler.scheduleIn(EVT_SCANLINE_ADVANCE, 1232, [this]() { fireScanlineAdvance(); });
 }
 
 

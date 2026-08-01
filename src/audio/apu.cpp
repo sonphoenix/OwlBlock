@@ -505,7 +505,7 @@ void APU::onTimerOverflow(int timerIndex) {
         << " dma3_cnt=0x" << bus.dmaController.channels[3].cnt
         << "\n";
     dbg.flush();*/
-    lastOverflowCycle = bus.step_counter + 1232 * bus.vcount;
+    lastOverflowCycle = (uint32_t)bus.scheduler.currentCycle;
     if (!apuEnabled) return;
     if ((int)fifoA.timerSelect == timerIndex) {
         fifoA.pop();
