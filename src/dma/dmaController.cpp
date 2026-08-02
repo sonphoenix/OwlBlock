@@ -37,8 +37,8 @@ void DMAController::execute(int channel, Bus& bus) {
 
     if (bus.save.saveType == SaveController::SAVE_EEPROM &&
         ch.dad >= 0x0D000000 && ch.dad <= 0x0DFFFFFF) {
-        if (count == 73) bus.save.eepromLargeAddress = false;
-        else if (count == 81) bus.save.eepromLargeAddress = true;
+        if (count == 73 || count == 9)  bus.save.eepromLargeAddress = false;
+        else if (count == 81 || count == 17) bus.save.eepromLargeAddress = true;
     }
 
     uint8_t dest_adj = isFIFO ? 2 : (ch.cnt >> 21) & 0x3;

@@ -9,7 +9,6 @@ void SaveController::detectEEPROMSize(const std::vector<uint8_t>& rom) {
     for (int i = (int)rom.size() - 1; i >= 0; i--) {
         if (rom[i] != 0) { romSize = (uint32_t)i + 1; break; }
     }
-    eepromLargeAddress = (romSize >= 0x1000000);
     dbg << "[EEPROM_SIZE] romSize=0x" << std::hex << romSize
         << " eepromLargeAddress=" << eepromLargeAddress << "\n";
     dbg.flush();

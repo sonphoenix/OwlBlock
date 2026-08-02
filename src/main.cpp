@@ -37,7 +37,7 @@ int main() {
     bus.ppuptr = &ppu;
     bus.apuptr = &apu;
     bus.loadBIOS("bios/gba_bios.bin");
-    bus.loadROM("roms/redfire.gba");
+    bus.loadROM("roms/Legend of Zelda, The - The Minish Cap (USA).gba");
     bus.init();
     dbg << "[LOOP_BYTES] ";
     for (uint32_t a = 0x800f19c; a <= 0x800f1a4; a += 2) {
@@ -53,7 +53,7 @@ int main() {
     InitWindow(GAME_W * 3 + DEBUG_PANEL_W, 600, "Owl Block");
     apu.init();
     SetTargetFPS(60);
-    ToggleFullscreen();
+    //ToggleFullscreen();
 
     Image img = GenImageColor(GAME_W, GAME_H, BLACK);
     Texture2D texture = LoadTextureFromImage(img);
@@ -259,7 +259,9 @@ int main() {
 
         EndDrawing();
     }
-    bus.save.saveToDisk("game.sav");
+    dbg << "[EXIT_SAVE] path=" << bus.currentSavePath << " size=" << bus.save.saveData.size() << "\n";
+    dbg.flush();
+    bus.save.saveToDisk(bus.currentSavePath.c_str());
     UnloadTexture(texture);
     CloseWindow();
     return 0;

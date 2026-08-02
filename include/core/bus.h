@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include<string>
 #include "save/SaveController.h"
 #include "timer/TimerController.h"
 #include "dma/DMAController.h"
@@ -34,7 +35,7 @@ struct Bus {
     std::vector<uint8_t> rom;
     std::vector<uint8_t> io;
     std::vector<uint8_t> oam;
-
+    std::string currentSavePath;
     SaveController save;
     TimerController timers;
     DMAController dmaController;

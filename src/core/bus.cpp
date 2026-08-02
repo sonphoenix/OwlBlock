@@ -6,6 +6,7 @@
 #include "common/gba_registers.h"
 #include <algorithm> 
 #include <cstring>
+#include<filesystem>
 extern std::ofstream dbg;
 Bus::Bus() :
     cpuptr(nullptr),       // Start with no CPU linked
@@ -63,10 +64,6 @@ static inline bool isOpenBusRegion(uint32_t address) {
 
 uint8_t Bus::read8(uint32_t address) {
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] read addr=0x" << std::hex << address
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             return save.readEEPROM();
         return 0xFF;
@@ -137,10 +134,6 @@ uint8_t Bus::read8(uint32_t address) {
 }
 uint16_t Bus::read16(uint32_t address) {
     if ((address & ~1) >= 0x0D000000 && (address & ~1) <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] read16 addr=0x" << std::hex << address
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             return save.readEEPROM();
         return 0xFF;
@@ -174,10 +167,6 @@ uint32_t Bus::read32(uint32_t address) {
     }
 
     if ((address & ~3) >= 0x0D000000 && (address & ~3) <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] read32 addr=0x" << std::hex << address
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             return save.readEEPROM();
         return 0xFF;
@@ -217,11 +206,6 @@ uint32_t Bus::read32(uint32_t address) {
 void Bus::write8(uint32_t address, uint8_t value) {
     mdr = (uint32_t)value * 0x01010101u;
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] write8 addr=0x" << std::hex << address
-            << " val=0x" << (int)value
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             save.writeEEPROM(value & 1);
         return;
@@ -408,11 +392,6 @@ void Bus::write16(uint32_t address, uint16_t value) {
     mdr = (uint32_t)value * 0x00010001u;
 
     if (address >= 0x0D000000 && address <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] write16 addr=0x" << std::hex << address
-            << " val=0x" << value
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             save.writeEEPROM(value & 1);
         return;
@@ -457,11 +436,6 @@ void Bus::write32(uint32_t address, uint32_t value) {
         dbg.flush();
     }
     if (addr >= 0x0D000000 && addr <= 0x0DFFFFFF) {
-        dbg << "[EEPROM_ACCESS] write32 addr=0x" << std::hex << addr
-            << " val=0x" << value
-            << " state=" << (int)save.eepromState
-            << " PC=0x" << cpuptr->reg[15] << "\n";
-        dbg.flush();
         if (save.saveType == save.SAVE_EEPROM)
             save.writeEEPROM(value & 1);
         return;
@@ -685,7 +659,16 @@ void Bus::loadROM(const char* path) {
     }
     f.read((char*)rom.data(), 0x2000000);
     save.detectSaveType(rom);
-    save.loadFromDisk("game.sav");
+    dbg << "[SAVE_TYPE] " << (int)save.saveType << "\n";
+    dbg.flush();
+
+    std::filesystem::path romPath(path);
+    std::string baseName = romPath.stem().string(); 
+
+    std::filesystem::create_directories("saves");       
+    currentSavePath = "saves/" + baseName + ".sav";
+
+    save.loadFromDisk(currentSavePath.c_str());
 }
 
 void Bus::setKeyState(int bit, bool pressed) {
