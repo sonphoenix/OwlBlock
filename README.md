@@ -68,9 +68,11 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 ### APU
 - PSG Channel 1: square wave with frequency sweep and volume envelope
 - PSG Channel 2: square wave with volume envelope
-- PSG Channels 3 (wave) and 4 (noise): stubs, not yet active
+- PSG Channel 3: wave channel, 32-nibble wave RAM playback, 100%/50%/25%/mute volume shifting, 256-step length counter
+- PSG Channel 4: noise channel, 15-bit/7-bit (short mode) LFSR, divisor + clock-shift period, envelope
 - DMA FIFO channels A and B: timer-driven pop, DMA refill
 - Frame sequencer at 512Hz (length counters, sweep, envelope)
+- Master volume (NR50) and per-channel left/right panning (NR51)
 - Raylib AudioStream output (32768Hz, stereo, 16-bit)
 
 ### Save System
@@ -146,7 +148,6 @@ Dependencies:
 | G (memory tab) | Go to address |
 
 ## TODO
-- PSG Channels 3 (wave) and 4 (noise)
 - Flash save chip command emulation
 - Link cable / serial
 - More games tested and fixed
