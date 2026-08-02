@@ -111,3 +111,8 @@ void DMAController::onHBlank(Bus& bus) {
         execute(ch, bus);
     }
 }
+
+void DMAController::reset() {
+    for (int i = 0; i < 4; i++) channels[i] = DMAChannel{};
+    pendingCycles = 0;
+}

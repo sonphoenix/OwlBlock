@@ -38,6 +38,12 @@ struct Scheduler {
         events[type].active = false;
     }
 
+
+    void reset() {
+        for (auto& e : events) e.active = false;
+        currentCycle = 0;
+    }
+
     uint64_t peekNextEventCycle() const {
         uint64_t soonest = UINT64_MAX;
         for (auto& e : events)

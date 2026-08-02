@@ -25,6 +25,18 @@ struct TimerController {
         apu = apuPtr;
     }
 
+    void reset() {
+        for (int i = 0; i < 4; i++) {
+            timer_reload[i] = 0;
+            timer_value[i] = 0;
+            timer_running[i] = false;
+            timer_cascade[i] = false;
+            timer_irqEnabled[i] = false;
+            timer_prescalerSel[i] = 0;
+            if (scheduler) scheduler->cancel((SchedEventType)(EVT_TIMER0 + i));
+        }
+    }
+
     void handleWrite(std::vector<uint8_t>& ioRef, uint32_t ioAddr, uint8_t value) {
         int i = (ioAddr - 0x100) / 4;
         int byteOff = (ioAddr - 0x100) % 4;

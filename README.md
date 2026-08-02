@@ -16,6 +16,7 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 - All CPU modes with correct banked register switching (USR/FIQ/IRQ/SVC/ABT/UND/SYS)
 - SWI handling — HLE for SWI 4 (IntrWait) and SWI 5 (VBlankIntrWait)
 - Passes standard ARM/THUMB test suites
+- Soft reset (F2): reinitializes registers and re-enters the ROM without reloading BIOS/ROM from disk
 
 ### Bus / Memory
 - Full GBA memory map: BIOS, EWRAM, IWRAM, VRAM, OAM, PRAM, ROM, I/O
@@ -74,10 +75,11 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 
 ### Save System
 - Auto-detection from ROM header markers (EEPROM_V, SRAM_V, FLASH_V, FLASH512_V, FLASH1M_V)
+- Per-game save files: each ROM gets its own `.sav` in `saves/`, named after the ROM file
 - SRAM (32KB)
-- EEPROM: full bit-serial state machine, auto-detects 6-bit vs 14-bit addressing from DMA transfer count
+- EEPROM: full bit-serial state machine; 6-bit vs 14-bit addressing is detected live from each DMA transfer's word count, not guessed from ROM size
 - Flash 64KB / 128KB: detected, save data allocated (full command emulation pending)
-- Persistent save to game.sav on exit, loaded on startup
+- Save loaded on ROM load, written to disk on clean exit
 
 ### Debugger (built-in)
 - Raylib-based debug panel alongside the game view, toggleable on/off
@@ -90,17 +92,31 @@ A Game Boy Advance emulator written in C++ from scratch, built as a learning pro
 
 ## Building
 
-Open `Owl BLock.sln` in Visual Studio 2022 and build in x64 Debug or Release.
+This project uses CMake. Dependencies are fetched automatically on first configure (Dear ImGui docking branch, rlImGui) or linked from prebuilt binaries already in the repo (raylib, in `lib/`).
 
-Dependencies are included:
-- raylib — rendering and audio
-- nlohmann/json — included in `include/nlohmann/`
+**In Visual Studio 2022:**
+- **File → Open → Folder...** and select the project root (the folder containing `CMakeLists.txt`)
+- VS auto-detects the CMake project and configures it — check the Output window (CMake pane) for progress
+- Pick a configuration (`x64-Debug` or `x64-Release`) from the top toolbar, select `OwlBlock.exe` as the run target, and build (`Ctrl+Shift+B`) or run (▶)
+
+**From a terminal (any OS):**
+```
+cmake -B build
+cmake --build build --config Release
+```
+
+Dependencies:
+- raylib — rendering and audio (prebuilt, in `lib/`)
+- Dear ImGui (docking branch) + rlImGui — fetched automatically via CMake
+- nlohmann/json — included in `include/vendor/nlohmann/`
 
 ## Setup
 
 **BIOS:** Place your GBA BIOS file as `bios/gba_bios.bin`. The emulator will not run without it. You must dump this from your own hardware.
 
-**ROM:** Place your `.gba` ROM file in the project root or adjust the path in `main.cpp`.
+**ROM:** Place your `.gba` ROM file in the `roms/` folder, or adjust the path in `main.cpp`.
+
+**Saves:** Written automatically to `saves/<rom-name>.sav`, created on first load of a given ROM.
 
 ## Controls
 
@@ -120,6 +136,7 @@ Dependencies are included:
 |---|---|
 | P | Pause / Resume |
 | F1 | Toggle debug panel / window layout |
+| F2 | Soft reset (reinitialize CPU/PPU/APU/DMA/timers, keep ROM and save data) |
 | O | Single step |
 | Hold O | Fast step |
 | Shift+O | Turbo step (1000x) |
@@ -133,4 +150,6 @@ Dependencies are included:
 - Flash save chip command emulation
 - Link cable / serial
 - More games tested and fixed
-- GUI overhaul (docked panels, menu bar) using Dear ImGui
+- GUI overhaul (docked panels, menu bar) using Dear ImGui — in progress
+- Configurable controller bindings
+- Persistent window/settings config

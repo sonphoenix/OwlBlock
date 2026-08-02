@@ -280,6 +280,20 @@ int CPU::Step() {
     }
 }
 
+
+void CPU::reset() {
+    for (int i = 0; i < 16; i++) reg[i] = 0;
+    cpsr = 0xD3;
+    halted = false;
+    reg_svc[0] = reg_svc[1] = 0;
+    reg_irq[0] = reg_irq[1] = 0;
+    reg_abt[0] = reg_abt[1] = 0;
+    reg_und[0] = reg_und[1] = 0;
+    for (int i = 0; i < 7; i++) { reg_fiq[i] = 0; reg_user[i] = 0; }
+    spsr_svc = spsr_irq = spsr_abt = spsr_und = spsr_fiq = 0;
+    skipBIOS();   // re-establish boot PC/SP exactly like the initial startup does
+}
+
 uint32_t CPU::getReg(uint8_t index) {
     if (index == 15) {
         if (cpsr & (1 << 5))   // Thumb

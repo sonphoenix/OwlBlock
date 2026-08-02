@@ -17,6 +17,7 @@ public:
     void writeRegister(uint32_t ioOffset, uint32_t val);
     void onTimerOverflow(int timerIndex);
     void onFIFORefill(int fifoIndex);
+    void reset();
 
 private:
     Bus& bus;

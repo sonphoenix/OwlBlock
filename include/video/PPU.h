@@ -29,4 +29,5 @@ struct PPU {
 	void renderMode5(uint8_t scanline);
 	void renderMode2(uint8_t scanline);
 	void renderSprites(uint8_t scanline);
+	void reset();
 };

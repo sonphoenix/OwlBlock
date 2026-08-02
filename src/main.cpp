@@ -112,6 +112,10 @@ int main() {
             ApplyLayout(debugMode, gameScale);
         }
 
+        if (IsKeyPressed(KEY_F2)) {
+            bus.reset();
+        }
+
         if (paused && !bpInputActive && bpEnabled && IsKeyPressed(KEY_R)) {
             runningToBp = true;
         }
@@ -198,8 +202,8 @@ int main() {
             if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  keys &= ~(1 << 5);
             if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_UP))    keys &= ~(1 << 6);
             if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_FACE_DOWN))  keys &= ~(1 << 7);
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_TRIGGER_1))  keys &= ~(1 << 8);
-            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) keys &= ~(1 << 9);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_LEFT_TRIGGER_1))  keys &= ~(1 << 9);
+            if (IsGamepadButtonDown(GAMEPAD_ID, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) keys &= ~(1 << 8);
 
             const float DEADZONE = 0.4f;
             float axisX = GetGamepadAxisMovement(GAMEPAD_ID, GAMEPAD_AXIS_LEFT_X);
@@ -226,6 +230,8 @@ int main() {
             }
             UpdateTexture(texture, ppu.frameBuffer.data());
         }
+
+
 
         BeginDrawing();
         ClearBackground({ 10, 10, 20, 255 });

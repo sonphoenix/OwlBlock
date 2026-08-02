@@ -43,6 +43,27 @@ void APU::shutdown() {
     g_apu = nullptr;
 }
 
+void APU::reset() {
+    ch1 = Channel1{};
+    ch2 = Channel2{};
+    ch3 = Channel3{};
+    ch4 = Channel4{};
+    fifoA = FIFOChannel{};
+    fifoB = FIFOChannel{};
+    frameSeqTimer = 0;
+    frameSeqStep = 0;
+    apuEnabled = false;
+    nr50 = 0;
+    nr51 = 0;
+    sampleTimer = 0;
+    std::fill(ringL.begin(), ringL.end(), 0);
+    std::fill(ringR.begin(), ringR.end(), 0);
+    ringWrite = 0;
+    ringRead = 0;
+}
+
+
+
 void APU::writeRegister(uint32_t ioOffset, uint32_t val) {
     if (ioOffset == 0xA0) fifoA.push(val);
     if (ioOffset == 0xA4) fifoB.push(val);

@@ -31,6 +31,38 @@ Bus::Bus() :
     io[0x131] = 0x03;
 };
 
+
+void Bus::reset() {
+    std::fill(ewram.begin(), ewram.end(), 0);
+    std::fill(iwram.begin(), iwram.end(), 0);
+    std::fill(vram.begin(), vram.end(), 0);
+    std::fill(oam.begin(), oam.end(), 0);
+    std::fill(pram.begin(), pram.end(), 0);
+    std::fill(io.begin(), io.end(), 0);
+
+    // Same power-on defaults as the constructor
+    io[0x00] = 0x01;
+    io[0x88] = 0x00;
+    io[0x89] = 0x02;
+    io[0x130] = 0xFF;
+    io[0x131] = 0x03;
+
+    bios_latch = 0;
+    postflg = 0;
+    vcount = 0;
+
+    dmaController.reset();
+    timers.reset();
+    scheduler.reset();
+
+    if (cpuptr) cpuptr->reset();
+    if (ppuptr) ppuptr->reset();
+    if (apuptr) apuptr->reset();
+
+    init();   // re-schedules HBlank/scanline-advance, same as first startup
+}
+
+
 void Bus::updateBiosLatch(uint32_t val) { bios_latch = val; }
 
 inline uint32_t mirror(uint32_t addr, uint32_t base, uint32_t size) {

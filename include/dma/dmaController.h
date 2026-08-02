@@ -18,4 +18,6 @@ struct DMAController {
     void execute(int channel, Bus& bus);             // needs bus for read/write
     void onVBlank(Bus& bus);
     void onHBlank(Bus& bus);
+    void reset();
 };
+

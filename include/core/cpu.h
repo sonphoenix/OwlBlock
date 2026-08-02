@@ -40,6 +40,7 @@ struct CPU {
     void switchMode(uint8_t newMode);
     void restoreCPSRFromSPSR();
     void setCPSR(uint32_t val);
+    void reset();
     uint32_t getReg(uint8_t index);
 
 

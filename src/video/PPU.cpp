@@ -678,6 +678,21 @@ void PPU::renderSprites(uint8_t scanline) {
     }
 }
 
+
+void PPU::reset() {
+    std::fill(frameBuffer.begin(), frameBuffer.end(), 0);
+    memset(bgPrioBuffer, 0, sizeof(bgPrioBuffer));
+    memset(bgLineBuffer, 0, sizeof(bgLineBuffer));
+    memset(objLineBuffer, 0, sizeof(objLineBuffer));
+    memset(objPriorityBuffer, 0, sizeof(objPriorityBuffer));
+    memset(objSemiTransBuffer, 0, sizeof(objSemiTransBuffer));
+    bg2RefX = bg2RefY = 0;
+    bg3RefX = bg3RefY = 0;
+}
+
+
+
+
 // ---------------------------------------------------------------------------
 // renderScanLine
 // ---------------------------------------------------------------------------

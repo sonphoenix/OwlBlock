@@ -60,4 +60,5 @@ struct Bus {
     void setKeyState(int bit, bool pressed);
     void onVBlank();
     void onHBlank();
+    void reset();
 };
