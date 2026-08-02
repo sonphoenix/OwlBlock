@@ -2,16 +2,15 @@
 x64/
 Debug/
 Release/
-roms/
 out/
+roms/
 *.exe
 *.obj
 *.pdb
 *.ilk
 *.ipdb
 *.iobj
-Owl BLock/Debug/
-Owl BLock/Release/
+
 # Visual Studio
 .vs/
 *.vcxproj.user
@@ -19,14 +18,12 @@ Owl BLock/Release/
 # GBA BIOS — copyrighted
 *.bin
 
-# ROMs — copyrighted
-*.gba
-*.zip
-*.sav
+roms/*.gba
+roms/*.zip
+saves/*.sav
 
 # Generated logs
 debug.txt
-log.txtr o m s / 
- 
- l o g . t x t  
- 
+log.txt
+
+
