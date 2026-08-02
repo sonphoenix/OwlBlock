@@ -146,11 +146,3 @@ Dependencies:
 | R | Run to breakpoint |
 | ESC | Cancel run-to-breakpoint |
 | G (memory tab) | Go to address |
-
-## TODO
-- Flash save chip command emulation
-- Link cable / serial
-- More games tested and fixed
-- GUI overhaul (docked panels, menu bar) using Dear ImGui — in progress
-- Configurable controller bindings
-- Persistent window/settings config
